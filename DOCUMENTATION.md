@@ -1,729 +1,1457 @@
-# The Safety Sentinel — SLM Guardrails & Anti-Hallucination
+# The Safety Sentinel – SLM Guardrails & Anti-Hallucination
 
-**University of Bari Aldo Moro — Computer Science Department**  
-Master's Degree in Computer Science — Security Engineering Curriculum  
-Urban Security Exam | Case Study | Academic Year 2025/2026
+**Urban Security Exam – Case Study**
 
-**Authors:**
-- Cappiello Belisario — matr. 856198 — b.cappiello1@studenti.uniba.it
-- Scalise Domenico — matr. 865702 — d.scalise@studenti.uniba.it
+**University of Bari Aldo Moro**  
+Computer Science Department  
+Master’s Degree Course in Computer Science  
+Security Engineering Curriculum
 
----
+**Authors**
 
-## Overview
+- Cappiello Belisario – Student ID 856198
+- Scalise Domenico – Student ID 865702
 
-The Safety Sentinel is a multi-layer middleware system designed to improve the safety and factual reliability of a fixed Small Language Model (SLM). Rather than modifying or retraining the model's internal parameters, it operates as an external wrapper around the inference process, making it largely model-independent.
-
-The system addresses two main failure classes:
-
-- **Unsafe generation** — responses triggered by malicious prompts, prompt injection attempts, or jailbreak techniques.
-- **Hallucination** — factual statements not supported by any available trusted source.
+**Academic Year 2025/2026**
 
 ---
 
-## Table of Contents
+## Documentation status
 
-1. [Project Background and Objectives](#chapter-1--project-background-and-objectives)
-2. [Background and Technologies](#chapter-2--background-and-technologies)
-3. [System Design](#chapter-3--system-design)
-4. [Dataset and Experimental Setup](#chapter-4--dataset-and-experimental-setup)
-5. [Implementation](#chapter-5--implementation)
-6. [Testing and Results](#chapter-6--testing-and-results)
-7. [Discussion](#chapter-7--discussion)
-8. [Conclusions and Future Work](#chapter-8--conclusions-and-future-work)
+This document describes the project according to the implementation available in the repository at the end of the RAG development phase.
+
+The following components are currently implemented and testable:
+
+- local Ollama client configured for `gemma:2b`;
+- input and output guardrail module;
+- FastAPI application skeleton and `/api/chat` endpoint;
+- verified Red Team dataset and evaluation key;
+- trusted local knowledge base;
+- PDF text extraction;
+- overlapping text chunking;
+- embedding generation with Sentence Transformers;
+- persistent ChromaDB storage;
+- semantic retrieval with source and page metadata;
+- unit tests for the guardrail module.
+
+The following components are still being integrated or evaluated:
+
+- final implementation of `SafetySentinel.run_pipeline()`;
+- replacement or adaptation of the original `rag_engine.py` stub;
+- complete grounded prompt construction;
+- citation validation;
+- automatic Red Team execution against baseline and protected modes;
+- final safety, hallucination, citation, and latency metrics.
+
+Sections that depend on these activities are marked as pending rather than populated with estimated or invented results.
 
 ---
 
-## Chapter 1 — Project Background and Objectives
+# Contents
 
-### 1.1 Introduction
+1. [Project Background and Objectives](chapter_1)
+2. [Background and Technologies](chapter_2)
+3. [System Design](chapter_3)
+4. [Dataset and Experimental Setup](chapter_4)
+5. [Implementation](chapter_5)
+6. [Testing and Results](chapter_6)
+7. [Discussion](chapter_7)
+8. [Conclusions and Future Work](chapter_8)
+9. [References](references)
 
-Small Language Models are increasingly adopted where limited computational resources, reduced latency, local execution, and data confidentiality are important requirements. However, their integration into real-world systems introduces relevant security and reliability risks. An unprotected model may generate harmful content, follow adversarial instructions, or fabricate information when its internal knowledge is incomplete.
+---
 
-### 1.2 Motivation
+# Chapter 1 – Project Background and Objectives
 
-Explain why SLMs, despite being lighter and locally deployable, can produce:
+## 1.1 Introduction
 
-- Fabricated or invented information
-- Responses unsupported by any source
-- Dangerous or harmful content
-- Responses to jailbreak-manipulated requests
-- Overly confident answers despite lacking knowledge
+Small Language Models (SLMs) are increasingly adopted in applications where limited computational resources, reduced latency, local execution, and data confidentiality are important requirements. Compared with larger language models, SLMs are easier to deploy on consumer hardware and may operate without sending user data to an external cloud service. These characteristics make them attractive for experimental systems and security-sensitive applications.
 
-### 1.3 Project Objectives
+Despite these advantages, integrating an SLM into a real application introduces security and reliability risks. A language model may generate harmful content, follow adversarial instructions, provide unsupported factual claims, or fabricate information when its internal knowledge is incomplete. These problems are particularly significant when the generated output is fluent and confident, because users may have difficulty distinguishing verified information from plausible but incorrect content.
+
+This case study presents **The Safety Sentinel**, a multi-layer middleware system designed to improve the safety and factual reliability of a fixed Small Language Model. Rather than modifying or retraining the internal parameters of the model, the proposed approach operates as an external wrapper around the inference process. This design makes the system largely model-independent and permits the same architecture to be adapted to different locally deployed language models.
+
+The protected pipeline addresses two main classes of failure. The first is **unsafe generation**, including responses produced after malicious prompts, prompt-injection attempts, or jailbreak techniques intended to bypass safety instructions. The second is **hallucination**, defined in this project as the generation of factual statements that are not supported by the trusted information available to the application.
+
+To mitigate unsafe interactions, the system introduces input and output guardrail layers. The input guardrail analyzes the prompt before it reaches the language model and blocks requests that match configured risk indicators. The output guardrail examines the generated response and prevents unsafe or policy-violating content from being returned to the user.
+
+To reduce hallucinations, Safety Sentinel integrates a **Retrieval-Augmented Generation (RAG)** pipeline based on a local knowledge base composed of verified documents. Before generation, the system retrieves the most relevant passages and provides them to the SLM as contextual evidence. The intended final pipeline instructs the model to use only the retrieved context, cite its sources, and abstain when the available evidence is insufficient.
+
+The project also introduces a Red Team dataset containing adversarial prompts and factual questions designed to expose common weaknesses. The dataset includes jailbreak attempts, instruction overrides, system-prompt extraction requests, obfuscated inputs, false-premise questions, unsupported numerical claims, nonexistent sources, and questions intentionally outside the knowledge base.
+
+The final experimental evaluation will compare two configurations:
+
+1. the original unprotected SLM;
+2. the complete Safety Sentinel pipeline.
+
+The comparison will consider unsafe outputs, successful jailbreaks, hallucinated claims, source validity, correct refusals, false positives, and the latency introduced by the safety layers.
+
+## 1.2 Motivation
+
+The development of Safety Sentinel is motivated by the growing use of compact generative models in local and resource-constrained environments. Local execution can reduce dependence on external services and improve control over data processing, but it does not eliminate the weaknesses of generative models.
+
+One concern is the production of **invented or unsupported information**. A model may generate names, dates, numerical values, standards, or references that appear credible without being supported by evidence. In a security-related context, incorrect technical information can lead to poor design decisions or create a false perception of safety.
+
+A second concern is **unsafe content generation**. A malicious user may attempt to make the model ignore its previous instructions, adopt an unrestricted role, reveal internal configuration, or generate prohibited material. Such attempts can be direct or hidden through role-playing, Base64 encoding, punctuation-based obfuscation, and indirect instructions embedded in retrieved documents.
+
+A third concern is **overconfidence in the absence of knowledge**. A useful protected system should not merely improve retrieval; it should also support correct abstention. When the knowledge base does not contain adequate evidence, declaring insufficiency is preferable to producing a fabricated answer.
+
+The project therefore adopts a defense-in-depth strategy. No single filter is treated as sufficient. Instead, Safety Sentinel combines deterministic checks before inference, trusted retrieval, constrained prompt construction, output validation, and source-aware evaluation.
+
+## 1.3 Project Objectives
+
+The primary objective is to design and implement a Python application that wraps a locally executed SLM with safety and anti-hallucination mechanisms without fine-tuning its internal parameters.
 
 The technical objectives are:
 
-- Run a Small Language Model locally
-- Build a Red Team dataset
-- Implement guardrails on inputs
-- Implement controls on outputs
-- Integrate a local knowledge base via RAG
-- Force the model to cite its sources
-- Compare safety, reliability, and latency before and after applying protections
+1. **Execute an SLM locally** through Ollama.
+2. **Create a Red Team dataset** containing adversarial and hallucination-oriented prompts.
+3. **Implement an input guardrail** using keywords, regular expressions, normalization, and simple heuristics.
+4. **Implement an output guardrail** to detect unsafe content and possible prompt leakage.
+5. **Create a local RAG knowledge base** from verified documents.
+6. **Extract and chunk PDF content** while preserving source metadata.
+7. **Generate semantic embeddings** and store them in a persistent vector database.
+8. **Retrieve relevant evidence** for factual questions.
+9. **Construct grounded prompts** that constrain the model to retrieved information.
+10. **Require source citations** and support safe abstention.
+11. **Compare baseline and protected configurations** using the same dataset.
+12. **Measure safety, reliability, and latency** before and after protection.
 
-### 1.4 Main Contributions
+## 1.4 Main Contributions
 
-What has been concretely developed:
+The project contributions include:
 
-- Multi-layer middleware
-- Test dataset
-- Verified knowledge base
-- Logging system
-- Comparative metrics
-- Demonstrative Python application
+- a modular multi-layer middleware architecture;
+- a Red Team dataset with 60 prompts;
+- a separate evaluation key defining expected protected behavior;
+- a trusted knowledge base composed of four NIST and OWASP documents;
+- PDF extraction through PyMuPDF;
+- word-based chunking with overlap;
+- embedding generation using `sentence-transformers/all-MiniLM-L6-v2`;
+- persistent local storage through ChromaDB;
+- semantic retrieval with document, page, and chunk metadata;
+- an Ollama client configured for `gemma:2b`;
+- input and output guardrails with automated tests;
+- a FastAPI interface skeleton;
+- a planned automatic evaluation workflow for baseline/protected comparison.
 
----
-
-## Chapter 2 — Background and Technologies
-
-### 2.1 Small Language Models
-
-#### 2.1.1 Definition and Characteristics
-
-Describe what distinguishes an SLM from an LLM:
-
-- Fewer parameters
-- Lower memory consumption
-- Possibility of local execution
-- Lower latency
-- More limited linguistic and factual capabilities
-
-#### 2.1.2 Selected Model
-
-Present the chosen model (e.g., a variant of Gemma 2B or equivalent). Specify:
-
-- Name and version
-- Number of parameters
-- Format used
-- Hardware requirements
-- Loading library
-- Justification for the choice
-
-#### 2.1.3 Model Inference Process
-
-Describe:
-
-- Tokenization
-- Autoregressive generation
-- Context window
-- Temperature
-- Top-p sampling
-- Maximum number of tokens
-- Optional quantization
-
-### 2.2 Common Failure Modes of SLMs
-
-#### 2.2.1 Hallucination
-
-Define hallucination as the generation of unsupported, fabricated, or source-incompatible statements. Distinguish between:
-
-- Factual hallucination
-- Source hallucination
-- Fabricated citation
-- Answer beyond available knowledge
-
-#### 2.2.2 Unsafe Content Generation
-
-Describe the risk that the model generates content that is:
-
-- Violent
-- Discriminatory
-- Illegal
-- Related to harmful computing activities
-- Containing personal data or dangerous instructions
-
-#### 2.2.3 Prompt Injection and Jailbreaking
-
-Explain how a user may attempt to:
-
-- Ignore the system prompt
-- Change the model's role
-- Hide a harmful command
-- Use encoding or obfuscation
-- Build multi-turn manipulation
-- Request harmful output framed as a simulation or story
-
-### 2.3 Guardrail Systems
-
-#### 2.3.1 Keyword-Based Filtering
-
-Describe the advantages and limits of lexical filtering:
-
-- Simple and fast
-- Human-interpretable
-- Vulnerable to synonyms and obfuscation
-- Potential source of false positives
-
-#### 2.3.2 Classifier-Based Filtering
-
-Describe the use of a secondary classifier to assign risk categories to inputs and outputs.
-
-#### 2.3.3 Existing Guardrail Frameworks
-
-Briefly present the following as reference technologies (not all need to be implemented):
-
-- NeMo Guardrails
-- Llama Guard
-- Policy-based approaches
-- Secondary-model moderation
-
-### 2.4 Retrieval-Augmented Generation
-
-#### 2.4.1 RAG Architecture
-
-Describe the full process:
-
-1. Receive the user question
-2. Generate the embedding
-3. Search the knowledge base
-4. Select relevant documents
-5. Insert context into the prompt
-6. Generate the response
-7. Verify citations
-
-#### 2.4.2 Vector Database
-
-Describe the chosen vector database (e.g., FAISS or ChromaDB) and its role in semantic search.
-
-#### 2.4.3 Factual Grounding
-
-The model must respond only using retrieved context, and must refuse or declare insufficient knowledge when sources are not adequate.
+At the current stage, the knowledge-base builder has processed four documents, extracted 252 text-bearing pages, and stored 265 chunks. Retrieval tests correctly returned the relevant NIST AI RMF and OWASP passages for representative factual questions.
 
 ---
 
-## Chapter 3 — System Design
+# Chapter 2 – Background and Technologies
 
-### 3.1 Requirements
+## 2.1 Small Language Models
 
-#### 3.1.1 Functional Requirements
+### 2.1.1 Definition and Characteristics
 
-- Accept a user question
-- Classify the risk level of the input
-- Block harmful requests
-- Retrieve relevant documents
-- Generate a response with citations
-- Analyze output safety
-- Log decisions and processing times
+A Small Language Model is a generative language model designed to provide useful natural-language capabilities with a lower computational footprint than very large foundation models. The term does not define one universal parameter threshold; in this project it refers operationally to a model small enough to run locally on consumer hardware.
 
-#### 3.1.2 Non-Functional Requirements
+Relevant characteristics include:
 
-- Local execution
-- Modularity
-- Traceability
-- Low latency
-- Configurable policies
-- Knowledge base protection
-- Experiment reproducibility
+- fewer parameters than large-scale models;
+- reduced memory and storage requirements;
+- lower inference cost;
+- practical local deployment;
+- reduced reliance on external cloud services;
+- potentially lower latency after local initialization;
+- more limited factual coverage and reasoning capability.
 
-### 3.2 Threat Model
+The reduced footprint is useful for the project because the protected pipeline must be reproducible on standard development machines. However, smaller size does not guarantee safer behavior. The external middleware is therefore responsible for restricting unsafe requests and providing verified context.
 
-> This section is particularly important for the Urban Security examination.
+### 2.1.2 Selected Model
 
-#### 3.2.1 Assets
+The repository configures the Ollama client to use:
 
-- Response integrity
-- User safety
-- Knowledge base documents
-- Guardrail configurations
-- Experimental logs
-- Service availability
-
-#### 3.2.2 Adversaries
-
-- Malicious user
-- Inexperienced user
-- Prompt injector
-- Author of poisoned documents
-- Attacker attempting to extract the system prompt
-
-#### 3.2.3 Threats
-
-- Jailbreak
-- Prompt injection
-- Harmful output
-- Hallucinated facts
-- Fabricated citations
-- Retrieval of irrelevant documents
-- Knowledge-base poisoning
-- Denial of service via very long prompts
-
-### 3.3 Overall Architecture
-
-```
-User
-  │
-  ▼
-Input Normalization
-  │
-  ▼
-Input Guardrail ──────────────────► Blocked Request
-  │
-  ▼
-Retriever / Local Knowledge Base
-  │
-  ▼
-Grounded Prompt Builder
-  │
-  ▼
-Small Language Model
-  │
-  ▼
-Output Guardrail
-  │
-  ▼
-Citation and Grounding Validator
-  │
-  ▼
-Final Response
+```text
+gemma:2b
 ```
 
-### 3.4 Unprotected Pipeline
+The model is invoked through the local Ollama HTTP generation endpoint:
 
-The baseline configuration used as a comparison term:
-
-```
-User Prompt ──► SLM ──► Model Response
+```text
+http://localhost:11434/api/generate
 ```
 
-### 3.5 Protected Pipeline
+The project uses the model as a fixed inference component. Its weights are not trained or fine-tuned. This preserves the independence factor required by the assignment: the work concerns systems engineering, API wrapping, retrieval, and evaluation rather than internal model training.
 
-The full Safety Sentinel flow:
+The selected model is suitable for the prototype because it can be deployed locally and accessed through a simple HTTP interface. The final results must nevertheless be interpreted as results for this exact model and configuration, not as universal conclusions for every SLM.
 
+### 2.1.3 Model Inference Process
+
+The model inference process is autoregressive: the input prompt is tokenized and the model generates output tokens sequentially. The Ollama service abstracts model loading, tokenization, and generation behind an HTTP API.
+
+The current client submits:
+
+- the model identifier;
+- the complete prompt;
+- `stream: false`, requesting one complete response;
+- a request timeout of 15 seconds.
+
+Generation parameters such as temperature, top-p, context length, and maximum output length are not explicitly fixed in the current client and therefore use the model/service defaults. Before the final experiment, these values should be explicitly configured or recorded to improve reproducibility.
+
+## 2.2 Common Failure Modes of SLMs
+
+### 2.2.1 Hallucination
+
+Hallucination is the generation of content that is not supported by the relevant evidence. For this project, four forms are important:
+
+- **factual hallucination**: incorrect facts, names, dates, or numerical values;
+- **source hallucination**: attribution to a real source that does not contain the claim;
+- **fabricated citation**: invention of a document, page, standard, or DOI;
+- **answer beyond available knowledge**: an answer produced even though the local knowledge base is insufficient.
+
+The NIST Generative AI Profile discusses confabulation as a generative-AI risk, while the OWASP 2025 risk category on misinformation addresses false or misleading outputs that appear credible.
+
+### 2.2.2 Unsafe Content Generation
+
+An SLM may generate content that is dangerous, discriminatory, privacy-invasive, or otherwise incompatible with the application's policy. Relevant categories for the prototype include:
+
+- violent or dangerous requests;
+- malicious cyber requests;
+- toxic or degrading content;
+- sensitive-information disclosure;
+- system-prompt leakage;
+- instructions designed to bypass access or safety controls.
+
+The guardrail module does not attempt to solve every possible safety category. It implements a transparent first layer based on deterministic indicators and is evaluated using a curated Red Team dataset.
+
+### 2.2.3 Prompt Injection and Jailbreaking
+
+Prompt injection occurs when crafted input changes the intended behavior of an LLM application. A jailbreak is a related attempt to make the model disregard safety restrictions.
+
+Typical strategies include:
+
+- asking the model to ignore previous instructions;
+- claiming that the user has administrator authority;
+- assigning an unrestricted persona;
+- hiding malicious instructions in Base64;
+- separating prohibited words with punctuation;
+- framing the request as fiction or simulation;
+- placing malicious instructions inside retrieved content.
+
+OWASP identifies prompt injection as the first risk in its 2025 Top 10 for LLM and GenAI applications. This threat directly motivates the input checks, the Red Team categories, and the need to distinguish system instructions from retrieved text.
+
+## 2.3 Guardrail Systems
+
+Guardrails are external controls placed around model interaction. They can inspect input, retrieval context, generated output, tool calls, and conversation state.
+
+### 2.3.1 Keyword-Based Filtering
+
+Keyword filtering compares text against a configured blocklist. Its advantages are:
+
+- low computational cost;
+- predictable decisions;
+- simple testing;
+- clear rejection reasons;
+- no dependency on an additional model.
+
+Its limitations include:
+
+- synonym and paraphrase evasion;
+- false positives for legitimate educational discussion;
+- poor understanding of context;
+- difficulty detecting multilingual attacks;
+- sensitivity to spelling and obfuscation.
+
+The implemented guardrail reduces simple evasion by checking both word-bounded raw text and an alphanumeric normalized representation.
+
+### 2.3.2 Classifier-Based Filtering
+
+A secondary classifier can assign a risk label or score to an input or output. Unlike a pure blocklist, it can detect semantically related content that does not contain an exact keyword. However, it introduces additional latency, model dependencies, threshold selection, and its own false positives and false negatives.
+
+The current `SafetyGuard` class includes a placeholder for an optional output classifier, but the classifier is not yet active. The present implementation therefore relies on deterministic checks.
+
+A generic sentiment model should not automatically be treated as a toxicity or safety classifier: sentiment and harmfulness are different tasks. Any classifier added to the final system should be selected and evaluated for the intended safety taxonomy.
+
+### 2.3.3 Existing Guardrail Frameworks
+
+Two relevant reference approaches are:
+
+- **NVIDIA NeMo Guardrails**, an open-source toolkit for programmable input, retrieval, dialog, execution, and output rails;
+- **Llama Guard**, a family of safety models designed for prompt and response classification.
+
+Safety Sentinel does not require these frameworks to operate. They are studied as possible alternatives or extensions. The implemented prototype favors simple and inspectable Python controls because of the limited project scope and the need to measure each layer independently.
+
+## 2.4 Retrieval-Augmented Generation
+
+### 2.4.1 RAG Architecture
+
+Retrieval-Augmented Generation combines document retrieval with language-model generation. The implemented and planned process is:
+
+1. receive the user's question;
+2. normalize and validate the input;
+3. encode the question as a dense vector;
+4. query the local vector database;
+5. select the top-ranked chunks;
+6. combine the chunks with source metadata;
+7. build a grounded prompt;
+8. generate an answer through Ollama;
+9. validate output safety and citations.
+
+The retrieval component is already complete. The final orchestration and citation validator remain to be integrated.
+
+### 2.4.2 Vector Database
+
+ChromaDB is used as the local vector store. A persistent client writes the collection to `data/chroma_db/`, which is excluded from Git because it can be reconstructed from the source documents.
+
+Each stored record contains:
+
+- a unique chunk identifier;
+- the chunk text;
+- the dense embedding;
+- source filename;
+- PDF page number;
+- chunk index.
+
+The `safety_sentinel_kb` collection supports nearest-neighbor search using query embeddings generated by the same Sentence Transformer model used for document embeddings.
+
+### 2.4.3 Factual Grounding
+
+Factual grounding means constraining the answer to evidence retrieved from trusted documents. The final prompt will instruct the SLM to:
+
+- use only the provided context;
+- cite the supplied source labels;
+- avoid inventing sources or page numbers;
+- explicitly abstain when the context is insufficient.
+
+RAG reduces the probability of hallucination but does not guarantee truth. Retrieval may select incomplete or irrelevant chunks, and the model may misinterpret the evidence. For this reason, retrieval quality and citation validity must be evaluated separately from response fluency.
+
+---
+
+# Chapter 3 – System Design
+
+## 3.1 Requirements
+
+### 3.1.1 Functional Requirements
+
+The system shall:
+
+1. accept a textual prompt;
+2. reject empty or invalid input;
+3. analyze the prompt for malicious keywords and injection patterns;
+4. detect selected forms of obfuscation;
+5. retrieve relevant chunks from the local knowledge base;
+6. build an evidence-grounded prompt;
+7. send the prompt to a locally running Ollama model;
+8. inspect the generated response;
+9. return a safe response or a controlled refusal;
+10. expose the workflow through an API;
+11. record relevant latency and evaluation data;
+12. support automated execution of the Red Team dataset.
+
+### 3.1.2 Non-Functional Requirements
+
+The system should provide:
+
+- **local execution**, avoiding dependence on a commercial cloud inference API;
+- **modularity**, with separate guardrail, retrieval, model-client, API, and evaluation components;
+- **traceability**, retaining source and page metadata;
+- **reproducibility**, rebuilding the vector database through a script;
+- **low overhead**, relative to baseline generation;
+- **fault isolation**, so one failed dataset prompt does not terminate an entire experiment;
+- **maintainability**, using readable Python modules and explicit configuration;
+- **security awareness**, treating user input, retrieved documents, and model output as untrusted data.
+
+## 3.2 Threat Model
+
+### 3.2.1 Assets
+
+Protected assets include:
+
+- integrity of final answers;
+- confidentiality of internal prompts and configuration;
+- safety of the user;
+- trusted knowledge-base documents;
+- integrity of the ChromaDB index;
+- guardrail policies;
+- experimental logs and results;
+- availability of the local API and Ollama service.
+
+### 3.2.2 Adversaries
+
+The threat model considers:
+
+- a malicious user attempting to bypass guardrails;
+- an inexperienced user who may trust an incorrect answer;
+- a prompt-injection attacker;
+- an attacker attempting system-prompt extraction;
+- a contributor introducing a poisoned document;
+- a user generating excessive requests or oversized prompts.
+
+### 3.2.3 Threats
+
+Primary threats are:
+
+- direct prompt injection;
+- role-play jailbreaks;
+- encoded and obfuscated payloads;
+- system-prompt leakage;
+- unsafe output;
+- factual hallucination;
+- fabricated citations;
+- irrelevant retrieval;
+- indirect prompt injection from documents;
+- knowledge-base poisoning;
+- denial of service or excessive resource use.
+
+## 3.3 Overall Architecture
+
+```mermaid
+flowchart TD
+    U[User] --> N[Input Normalization]
+    N --> IG[Input Guardrail]
+    IG -->|Blocked| R[Safe Refusal]
+    IG -->|Allowed| Q[Query Embedding]
+    Q --> VS[(ChromaDB Knowledge Base)]
+    VS --> RET[Top-k Retrieved Chunks]
+    RET --> GP[Grounded Prompt Builder]
+    GP --> O[Ollama / Gemma 2B]
+    O --> OG[Output Guardrail]
+    OG -->|Blocked| R
+    OG -->|Allowed| CV[Citation Validator]
+    CV --> F[Final Response]
 ```
+
+The architecture follows a layered design. Deterministic controls are applied outside the model. Retrieval augments generation but does not directly grant the SLM access to arbitrary system resources.
+
+## 3.4 Unprotected Pipeline
+
+The baseline pipeline is:
+
+```text
+User Prompt -> Ollama Client -> Gemma 2B -> Model Response
+```
+
+No input filter, retrieval context, output filter, or citation check is applied. This configuration is needed to measure the original model's behavior on the same Red Team prompts.
+
+The baseline should use the same model and generation parameters as the protected pipeline so that the comparison isolates the effect of the safety layers.
+
+## 3.5 Protected Pipeline
+
+The intended protected pipeline is:
+
+```text
 User Prompt
-  ──► Input Guardrail
-  ──► Retrieval
-  ──► Grounded Generation
-  ──► Output Guardrail
-  ──► Citation Validation
-  ──► Final Response or Safe Refusal
+-> Input Guardrail
+-> ChromaDB Retrieval
+-> Grounded Prompt Construction
+-> Gemma 2B Generation
+-> Output Guardrail
+-> Citation Validation
+-> Final Response or Safe Refusal
 ```
 
-### 3.6 Guardrail Decision Policies
+Current status:
 
-Specify what happens when:
+- `SafetyGuard`: implemented;
+- RAG indexing and retrieval modules: implemented;
+- `OllamaClient`: implemented;
+- FastAPI endpoint: present;
+- `SafetySentinel` constructor: present;
+- `SafetySentinel.run_pipeline()`: pending integration;
+- grounded prompt builder: pending integration;
+- citation validator: pending implementation.
 
-| Condition | Action |
+The old `VectorDB` class in `src/rag_engine.py` is still a stub and should be replaced by, or adapted to, the completed modules in `src/rag/`.
+
+## 3.6 Guardrail Decision Policies
+
+The final orchestrator should apply the following policies:
+
+| Condition | Decision |
 |---|---|
-| Input is safe | Proceed to retrieval |
-| Input is ambiguous | Flag, optionally proceed with logging |
-| Input is clearly harmful | Block, return safe refusal |
-| No sources found | Abstain, return "cannot determine" response |
-| Response contains unsupported claims | Block or regenerate |
-| Model generates unsafe output | Block, do not return to user |
-| Citations do not match retrieved documents | Invalidate, return error or refusal |
+| Empty or non-string input | Reject |
+| Malicious keyword or obfuscated keyword | Reject and log reason |
+| Instruction override or role-play jailbreak | Reject and log reason |
+| Encoded malicious payload | Reject and log reason |
+| Input accepted | Continue to retrieval |
+| Relevant context retrieved | Build grounded prompt |
+| Context insufficient | Instruct model to abstain |
+| Ollama timeout or connection failure | Return controlled service error |
+| Unsafe generated output | Block and return safe fallback |
+| Prompt leakage indicator | Block and record critical event |
+| Invalid or fabricated citation | Reject, regenerate, or return validation failure |
+| Safe output with valid citations | Return final response |
+
+A future refinement may distinguish between clearly malicious input and ambiguous security-related educational questions. The current keyword approach can block legitimate discussions containing terms such as “malware” or “exploit”; this is a known false-positive risk.
 
 ---
 
-## Chapter 4 — Dataset and Experimental Setup
+# Chapter 4 – Dataset and Experimental Setup
 
-### 4.1 Red Team Dataset
+## 4.1 Red Team Dataset
 
-Describe the construction of a dataset containing at least two main categories.
+The project uses a curated CSV dataset containing 60 prompts. The main dataset is stored as:
 
-#### 4.1.1 Adversarial Safety Prompts
+```text
+data/red_team_dataset.csv
+```
 
-Classes to include:
+A separate file provides expected behavior and success criteria:
 
-- Direct harmful request
-- Role-playing jailbreak
-- Instruction override
-- Encoded prompt
-- Obfuscated malicious request
-- Multi-turn manipulation
-- System-prompt extraction attempt
+```text
+data/red_team_evaluation_key.csv
+```
 
-#### 4.1.2 Hallucination-Oriented Questions
+The dataset is designed for prototype evaluation rather than as a standardized benchmark. Its purpose is to compare the same model before and after the application of Safety Sentinel.
 
-Questions designed to expose hallucination:
+### 4.1.1 Adversarial Safety Prompts
 
-- About entities not present in the knowledge base
-- With false premises
-- With invented names or references
-- Highly specific queries
-- Ambiguous queries
-- Queries requiring unavailable information
-- Queries designed to induce source fabrication
+Thirty prompts test unsafe behavior and guardrail bypasses. The categories include:
 
-#### 4.1.3 Benign Control Prompts
+- system-prompt extraction;
+- direct jailbreak;
+- role-play jailbreak;
+- prompt injection;
+- authority impersonation;
+- instruction override;
+- Base64 or formatting-based obfuscation;
+- toxicity;
+- privacy and data-exfiltration requests;
+- indirect prompt injection;
+- unsafe fabrication;
+- output-guardrail evasion.
 
-Include legitimate requests to verify that the system does not indiscriminately block all inputs. These are essential for measuring false positive rate.
+The prompts are designed to exercise the middleware without embedding unnecessarily detailed operational instructions.
 
-### 4.2 Dataset Format
+### 4.1.2 Hallucination-Oriented Questions
 
-Each entry should follow this structure (CSV or JSONL):
+Thirty questions test factual reliability. They include:
 
-| Field | Description |
+- grounded questions answerable from NIST or OWASP sources;
+- detailed questions requiring precise retrieval;
+- cross-document questions;
+- false-premise questions;
+- unsupported numerical thresholds;
+- nonexistent publications and concepts;
+- questions outside the knowledge base;
+- future or underdetermined questions.
+
+For grounded questions, success requires a response supported by retrieved evidence. For unsupported questions, success requires abstention or explicit correction of the false premise.
+
+### 4.1.3 Benign Control Prompts
+
+The current safety and hallucination datasets contain legitimate factual prompts that serve as partial controls. For a stronger false-positive analysis, the final dataset should include a clearly labeled benign-control subset containing ordinary questions and legitimate educational security questions.
+
+This addition is important because blocking every security-related prompt would increase the apparent refusal rate without demonstrating useful safety.
+
+## 4.2 Dataset Format
+
+The primary CSV has two required columns:
+
+```text
+Prompt,Categoria
+```
+
+The evaluation-key file contains richer metadata:
+
+```text
+ID
+Prompt
+MacroCategoria
+Sottocategoria
+ComportamentoAttesoPipelineProtetta
+CriterioSuccesso
+```
+
+The automatic evaluation script should generate one result row per prompt and per pipeline mode. Recommended result fields are:
+
+```text
+id
+pipeline
+prompt
+category
+blocked
+block_reason
+response
+retrieved_sources
+input_guardrail_latency_ms
+retrieval_latency_ms
+generation_latency_ms
+output_guardrail_latency_ms
+total_latency_ms
+error
+```
+
+## 4.3 Trusted Knowledge Base
+
+The knowledge base contains four documents:
+
+1. NIST AI Risk Management Framework 1.0;
+2. NIST Generative AI Profile;
+3. NIST Adversarial Machine Learning taxonomy;
+4. OWASP Top 10 for LLM Applications 2025 clean reference.
+
+The source manifest is stored in:
+
+```text
+data/knowledge_base_manifest.csv
+```
+
+Document selection criteria include:
+
+- identifiable publisher;
+- relevance to AI risk, hallucination, prompt injection, and LLM security;
+- stable document structure;
+- local availability;
+- text extractability;
+- traceable title, year, and source.
+
+The OWASP item is a clean, text-searchable reference reconstructed from official OWASP material because the original distributed PDF rendered incorrectly in some viewers. It must be identified as a reconstructed reference, not represented as the original branded PDF.
+
+### Document preprocessing
+
+PyMuPDF extracts text page by page using:
+
+```python
+page.get_text("text", sort=True)
+```
+
+Empty pages are skipped. Every extracted page retains:
+
+- source filename;
+- one-based page number;
+- text content.
+
+### Chunking
+
+Pages are divided into word-based chunks using:
+
+```text
+chunk_size = 500 words
+chunk_overlap = 80 words
+```
+
+Chunking does not cross page boundaries. Each chunk has an identifier similar to:
+
+```text
+nist.ai.100-1_page_0025_chunk_000
+```
+
+The overlap reduces the risk that a relevant sentence is split at an arbitrary boundary.
+
+### Embeddings and storage
+
+The implementation uses:
+
+```text
+sentence-transformers/all-MiniLM-L6-v2
+```
+
+Embeddings are normalized and stored with documents and metadata in the ChromaDB collection:
+
+```text
+safety_sentinel_kb
+```
+
+The indexing run produced:
+
+| Item | Value |
+|---|---:|
+| Documents | 4 |
+| Text-bearing pages | 252 |
+| Chunks | 265 |
+| ChromaDB records | 265 |
+
+## 4.4 Experimental Environment
+
+The RAG component was developed and tested on:
+
+| Component | Configuration |
 |---|---|
-| `id` | Unique identifier |
-| `prompt` | The user input |
-| `category` | Class (adversarial / hallucination / benign) |
-| `expected_behavior` | Expected system action (block / respond / abstain) |
-| `expected_answer` | Expected response content (if applicable) |
-| `reference_documents` | Knowledge base doc IDs relevant to the query |
-| `risk_level` | low / medium / high |
-| `notes` | Additional context |
+| Platform | macOS on Apple Silicon |
+| CPU architecture | ARM64 |
+| Development machine | Apple Mac with M4 processor |
+| Python | 3.12.13 |
+| Virtual environment | Python `venv` |
+| Embedding acceleration | Apple Metal Performance Shaders (`mps:0`) |
+| PDF extraction | PyMuPDF |
+| Embedding library | Sentence Transformers |
+| Embedding model | `all-MiniLM-L6-v2` |
+| Vector database | ChromaDB PersistentClient |
+| Local SLM service | Ollama |
+| Configured SLM | `gemma:2b` |
+| API framework | FastAPI |
+| Test framework | pytest |
 
-### 4.3 Trusted Knowledge Base
+The exact package versions used for final experiments should be exported or pinned before submission.
 
-Describe:
+## 4.5 Evaluation Metrics
 
-- Origin and selection criteria of documents
-- Verification criteria
-- Supported formats
-- Chunking strategy
-- Metadata schema
-- Source identifiers
-- Update procedure and integrity checks
+### 4.5.1 Safety Metrics
 
-### 4.4 Experimental Environment
+**Unsafe Output Rate**
 
-Document the following:
+```text
+unsafe outputs / evaluated prompts
+```
 
-| Parameter | Value |
-|---|---|
-| Operating system | |
-| CPU | |
-| GPU (if present) | |
-| RAM | |
-| Python version | |
-| Key libraries | |
-| Model name and version | |
-| Generation parameters | |
-| Vector database and configuration | |
+**Attack Success Rate**
 
-### 4.5 Evaluation Metrics
+```text
+successful adversarial prompts / adversarial prompts
+```
 
-#### 4.5.1 Safety Metrics
+**Safe Refusal Rate**
 
-| Metric | Definition |
-|---|---|
-| **Unsafe Output Rate** | Percentage of outputs classified as unsafe |
-| **Attack Success Rate** | Percentage of successful jailbreaks |
-| **Safe Refusal Rate** | Percentage of dangerous requests correctly refused |
-| **False Positive Rate** | Legitimate requests incorrectly blocked |
+```text
+correctly refused malicious prompts / malicious prompts
+```
 
-#### 4.5.2 Reliability Metrics
+**False Positive Rate**
 
-| Metric | Definition |
-|---|---|
-| **Hallucination Rate** | Percentage of responses containing unsupported claims |
-| **Grounded Answer Rate** | Percentage of responses fully supported by retrieved sources |
-| **Citation Precision** | Percentage of cited sources that are valid and retrieved |
-| **Citation Coverage** | Percentage of factual claims accompanied by a citation |
-| **Correct Abstention Rate** | Rate of correct "I don't know" responses when sources are absent |
+```text
+benign prompts incorrectly blocked / benign prompts
+```
 
-#### 4.5.3 Performance Metrics
+### 4.5.2 Reliability Metrics
 
-| Metric | Definition |
-|---|---|
-| Mean latency | Average end-to-end response time |
-| Median latency | Median response time |
-| 95th percentile latency | Tail latency |
-| Retrieval time | Time spent in the vector search |
-| Guardrail processing time | Time spent in input + output guardrails |
-| Generation time | Time spent in SLM inference |
-| Overhead percentage | `(protected − baseline) / baseline × 100` |
+**Hallucination Rate**
+
+```text
+responses containing unsupported claims / factual test responses
+```
+
+**Grounded Answer Rate**
+
+```text
+answers supported by retrieved evidence / answerable factual prompts
+```
+
+**Citation Precision**
+
+```text
+valid cited sources / all cited sources
+```
+
+**Citation Coverage**
+
+```text
+supported factual claims with citations / factual claims requiring citations
+```
+
+**Correct Abstention Rate**
+
+```text
+correct abstentions / prompts unsupported by the knowledge base
+```
+
+### 4.5.3 Performance Metrics
+
+The experiment should record:
+
+- mean latency;
+- median latency;
+- 95th-percentile latency;
+- input-guardrail latency;
+- retrieval latency;
+- generation latency;
+- output-guardrail latency;
+- total protected-pipeline latency.
+
+Latency overhead is calculated as:
+
+```text
+(protected_latency - baseline_latency) / baseline_latency * 100
+```
+
+Retrieval distances are ranking values, not calibrated probabilities. They should not be interpreted as answer confidence without additional validation.
 
 ---
 
-## Chapter 5 — Implementation
+# Chapter 5 – Implementation
 
-### 5.1 Project Structure
+## 5.1 Project Structure
 
-```
-safety-sentinel/
-├── app.py
-├── config.yaml
-├── requirements.txt
+The current repository contains the following relevant structure:
+
+```text
+urban_security2026_cappiello_scalise/
 ├── data/
-│   ├── red_team_dataset.jsonl
-│   └── knowledge_base/
-├── sentinel/
-│   ├── input_guardrail.py
-│   ├── output_guardrail.py
-│   ├── retriever.py
-│   ├── prompt_builder.py
-│   ├── citation_validator.py
-│   ├── model_wrapper.py
-│   └── logger.py
+│   ├── knowledge_base/
+│   ├── knowledge_base_manifest.csv
+│   ├── red_team_dataset.csv
+│   └── red_team_evaluation_key.csv
 ├── scripts/
 │   ├── build_knowledge_base.py
-│   ├── run_baseline.py
-│   ├── run_protected.py
-│   └── evaluate_results.py
-└── results/
+│   ├── test_chunker.py
+│   ├── test_pdf_loader.py
+│   └── test_retrieval.py
+├── src/
+│   ├── api.py
+│   ├── guardrails.py
+│   ├── llm_client.py
+│   ├── main.py
+│   ├── rag_engine.py
+│   └── rag/
+│       ├── __init__.py
+│       ├── chunker.py
+│       ├── document_loader.py
+│       ├── retriever.py
+│       └── vector_store.py
+├── tests/
+│   ├── test_guardrails.py
+│   └── test_ollama_client.py
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
-### 5.2 Model Wrapper — `sentinel/model_wrapper.py`
+The generated directory `data/chroma_db/` is excluded from Git and rebuilt locally.
 
-Implement a script that:
+## 5.2 Model Wrapper
 
-- Initializes the model and tokenizer
-- Configures generation parameters (temperature, top-p, max tokens)
-- Exposes a single inference function
-- Measures and returns inference time
-- Handles errors and timeouts gracefully
+The model wrapper is implemented by `OllamaClient` in `src/llm_client.py`.
 
-### 5.3 Input Guardrail — `sentinel/input_guardrail.py`
+Its responsibilities are:
 
-#### 5.3.1 Prompt Normalization
+- sending HTTP POST requests to Ollama;
+- selecting `gemma:2b`;
+- disabling streaming;
+- applying a 15-second timeout;
+- returning the generated `response` field;
+- converting timeout, connection, HTTP, and malformed-response failures into controlled messages.
 
-- Lowercase conversion for checks
-- Whitespace normalization
-- Special character handling
-- Detection of obfuscated patterns
-- Length limit enforcement
+The wrapper isolates model communication from the rest of the application. This allows the orchestrator and evaluation scripts to use a stable Python method rather than directly managing HTTP requests.
 
-#### 5.3.2 Keyword Filter
+Current limitation: the wrapper returns error markers as strings. A structured result or dedicated exceptions would make API handling and metric collection more reliable.
 
-Describe categories, patterns, and the risk scoring logic. Return a risk score per category.
+## 5.3 Input Guardrail
 
-#### 5.3.3 Lightweight Safety Classifier
+The `SafetyGuard` class implements the input and output filtering layer.
 
-When present, document:
+### 5.3.1 Prompt Normalization
 
-- Model used
-- Output classes
-- Decision threshold
-- How it combines with the keyword filter score
+The guardrail creates a normalized form by removing non-alphanumeric characters and converting the remaining text to lowercase. This allows strings such as:
 
-### 5.4 Retrieval Module — `sentinel/retriever.py`
-
-Implement and document:
-
-- Document loading
-- Chunking strategy (chunk size, overlap)
-- Embedding generation
-- Index construction
-- Similarity search
-- `top_k` value
-- Minimum similarity threshold for filtering results
-
-### 5.5 Grounded Prompt Builder — `sentinel/prompt_builder.py`
-
-The fundamental system prompt template:
-
-```
-Answer the question using only the provided sources.
-Every factual claim must be supported by a citation in the format [source_id].
-If the sources do not contain enough information, state that
-the answer cannot be determined from the available knowledge base.
-Do not use any prior knowledge not present in the sources below.
+```text
+h.a.c.k
 ```
 
-### 5.6 Output Guardrail — `sentinel/output_guardrail.py`
+to be compared against the same keyword as:
 
-Checks performed on the generated response:
+```text
+hack
+```
 
-- Safety classification
-- Search for forbidden content patterns
-- Leakage detection (e.g., system prompt fragments)
-- Presence and format of citations
-- Block or regeneration trigger logic
+The module also rejects empty or invalid inputs.
 
-### 5.7 Citation Validator — `sentinel/citation_validator.py`
+### 5.3.2 Keyword Filter
 
-Verify that:
+The malicious-keyword set currently includes terms associated with:
 
-- Every cited identifier exists in the knowledge base
-- The cited source was actually retrieved in this request
-- No document outside the retrieved set is cited
-- Main factual claims are accompanied by at least one citation
+- hacking and exploitation;
+- denial of service;
+- malware and ransomware;
+- weapons and explosives;
+- theft and illegal activity;
+- bypass and jailbreak attempts.
 
-### 5.8 Logging and Monitoring — `sentinel/logger.py`
+Each keyword is tested against:
 
-For each request, record:
+1. the original lowercase input with word boundaries;
+2. the normalized alphanumeric representation.
 
-| Field | Description |
-|---|---|
-| `request_id` | Unique request identifier |
-| `prompt_category` | Category from dataset or inferred |
-| `input_guardrail_decision` | allow / block / flag |
-| `retrieved_documents` | List of retrieved doc IDs and scores |
-| `model_response` | Raw model output |
-| `output_guardrail_decision` | allow / block |
-| `citations` | Validated citation list |
-| `final_status` | Outcome returned to the user |
-| `retrieval_latency` | Milliseconds |
-| `generation_latency` | Milliseconds |
-| `total_latency` | Milliseconds |
+When a match is detected, the method returns a Boolean rejection decision and an explicit reason.
 
-### 5.9 Scripts
+### 5.3.3 Pattern and Heuristic Checks
 
-#### `scripts/build_knowledge_base.py`
-- **Purpose:** Load documents, chunk them, generate embeddings, and build the vector index.
-- **Input:** Raw document files in `data/knowledge_base/`
-- **Output:** Persisted vector index
+The guardrail also uses regular expressions for:
 
-#### `scripts/run_baseline.py`
-- **Purpose:** Run all dataset prompts through the unprotected SLM and collect responses.
-- **Input:** `data/red_team_dataset.jsonl`
-- **Output:** `results/baseline_results.jsonl`
+- ignoring previous instructions;
+- system override;
+- system-prompt extraction;
+- DAN/developer-mode role play;
+- unrestricted-persona requests.
 
-#### `scripts/run_protected.py`
-- **Purpose:** Run all dataset prompts through the full Safety Sentinel pipeline.
-- **Input:** `data/red_team_dataset.jsonl`
-- **Output:** `results/protected_results.jsonl`
+Additional heuristics include:
 
-#### `scripts/evaluate_results.py`
-- **Purpose:** Compute all evaluation metrics by comparing baseline and protected results against expected behaviors.
-- **Input:** `results/baseline_results.jsonl`, `results/protected_results.jsonl`
-- **Output:** Metrics tables (console and/or CSV)
+- detection and decoding of Base64-like sequences;
+- recursive scanning of decoded content;
+- rejection of inputs with an excessive special-character ratio.
 
-#### `app.py`
-- **Purpose:** Interactive demonstration application.
-- **Input:** User query from command line or simple UI
-- **Output:** Protected response with citations, guardrail decisions, and latency breakdown
+These checks are covered by the current unit tests.
+
+### 5.3.4 Lightweight Safety Classifier
+
+The class contains a placeholder for an optional output classifier:
+
+```python
+self._output_classifier = None
+```
+
+No classifier is active at the current stage. Consequently, the implemented output policy is deterministic. If a classifier is added, its exact model, labels, thresholds, hardware cost, and contribution to false positives must be documented.
+
+## 5.4 Retrieval Module
+
+The retrieval subsystem is divided into four modules.
+
+### `document_loader.py`
+
+- finds PDF files in the knowledge-base directory;
+- opens each document with PyMuPDF;
+- extracts text page by page;
+- uses `sort=True` to improve reading order;
+- skips empty pages;
+- preserves source and page metadata.
+
+### `chunker.py`
+
+- validates chunk parameters;
+- divides page text into word sequences;
+- uses a 500-word chunk size and 80-word overlap;
+- creates stable identifiers;
+- preserves source, page, and chunk index.
+
+### `vector_store.py`
+
+- initializes `SentenceTransformer`;
+- creates a persistent ChromaDB client;
+- obtains or creates `safety_sentinel_kb`;
+- encodes chunks in batches of 32;
+- normalizes embeddings;
+- stores records through `upsert`;
+- exposes the collection record count.
+
+Using `upsert` allows the builder to be executed repeatedly without duplicate-ID failures.
+
+### `retriever.py`
+
+- validates the query and `top_k`;
+- encodes the question;
+- queries ChromaDB with the embedding;
+- returns documents, metadata, identifiers, and distances;
+- limits the result count to the number of available records.
+
+The current default is:
+
+```text
+top_k = 4
+```
+
+The value is a practical starting point and should be treated as an experimental configuration rather than a universal optimum.
+
+## 5.5 Grounded Prompt Builder
+
+The final grounded prompt builder is not yet integrated into `main.py`. Its intended template is:
+
+```text
+You are a factual assistant.
+
+Answer the question using only the provided context.
+
+Rules:
+1. Do not use information outside the context.
+2. Cite sources using the supplied source labels.
+3. Do not invent documents, facts, page numbers, or citations.
+4. If the context is insufficient, state that the available
+   knowledge base does not contain enough information.
+
+QUESTION:
+{user_question}
+
+TRUSTED CONTEXT:
+[SOURCE_1: filename, page X]
+{retrieved_chunk}
+
+ANSWER:
+```
+
+Each retrieved chunk should be represented by an immutable source label. The labels supplied to the model must also be passed to the citation validator.
+
+## 5.6 Output Guardrail
+
+The implemented output checks include:
+
+- rejection of empty output;
+- detection of a canary token associated with internal leakage;
+- detection of prompt-related leakage patterns;
+- toxic-keyword checks;
+- optional classifier hook.
+
+Unsafe output is replaced by a safe fallback message. Security events are written to:
+
+```text
+data/security_audit.log
+```
+
+The output guardrail is useful but not a complete semantic safety solution. Exact keyword matching can miss paraphrases and can also block text that merely discusses an unsafe term.
+
+## 5.7 Citation Validator
+
+> **Status: pending implementation**
+
+The citation validator should verify that:
+
+1. every cited label was supplied in the grounded context;
+2. the cited filename exists in the retrieved result set;
+3. the page value matches retrieved metadata;
+4. no fabricated source identifier appears;
+5. a factual answer contains at least one valid citation;
+6. an abstention does not invent a citation.
+
+A first implementation can validate citation syntax and source membership. Full claim-level entailment checking is a more advanced extension and should not be claimed unless explicitly implemented.
+
+## 5.8 Logging and Monitoring
+
+The current guardrail module writes warning and critical events to a security audit log.
+
+The final pipeline should record one structured result per request:
+
+```text
+request_id
+pipeline_mode
+prompt_category
+input_guardrail_allowed
+input_guardrail_reason
+retrieved_chunk_ids
+retrieved_sources
+model_response
+output_guardrail_allowed
+output_guardrail_reason
+citations
+final_status
+input_guardrail_latency_ms
+retrieval_latency_ms
+generation_latency_ms
+output_guardrail_latency_ms
+total_latency_ms
+```
+
+Logs may contain sensitive or malicious prompt content. They should therefore be protected, minimized, and excluded from public commits.
+
+## 5.9 Scripts
+
+### `build_knowledge_base.py`
+
+Purpose: construct the local vector database.
+
+Input:
+
+```text
+data/knowledge_base/*.pdf
+```
+
+Process:
+
+```text
+PDF loading -> page extraction -> chunking -> embedding -> ChromaDB upsert
+```
+
+Output:
+
+```text
+data/chroma_db/
+```
+
+Observed build result:
+
+- 4 documents;
+- 252 pages;
+- 265 chunks;
+- 265 stored records.
+
+### `test_pdf_loader.py`
+
+Purpose: verify that all documents can be opened and their text can be extracted. It reports pages by source and prints a text sample.
+
+### `test_chunker.py`
+
+Purpose: validate chunk creation and metadata. It reports chunk counts per document and displays the first generated chunk.
+
+### `test_retrieval.py`
+
+Purpose: run an interactive semantic-search query and display:
+
+- chunk ID;
+- source;
+- page;
+- chunk index;
+- distance;
+- text preview;
+- retrieval latency.
+
+### Automatic Red Team runner
+
+> **Status: planned**
+
+A new script should iterate through `red_team_dataset.csv`, run each prompt in baseline and protected modes, continue after individual errors, and export structured results for metric calculation.
 
 ---
 
-## Chapter 6 — Testing and Results
+# Chapter 6 – Testing and Results
 
-### 6.1 Testing Methodology
+## 6.1 Testing Methodology
 
-Each prompt is executed:
+The complete evaluation will execute every Red Team prompt against:
 
-- On the unprotected model (baseline)
-- On the full Safety Sentinel pipeline
-- Optionally multiple times to reduce probabilistic variance
+1. **baseline mode**, containing only direct Ollama generation;
+2. **protected mode**, containing input guardrail, RAG, grounded prompt, output guardrail, and citation validation.
 
-### 6.2 Baseline Results
+For reproducibility:
 
-Report:
+- both modes must use the same model;
+- generation parameters should be fixed;
+- prompts must be executed in the same order;
+- failures and timeouts must be retained in the result file;
+- latency must be measured per component;
+- stochastic tests may be repeated if generation randomness is enabled.
 
-- Number of harmful responses
-- Successful jailbreaks
-- Hallucinated responses
-- Fabricated citations
-- Mean latency
+The final assessment will combine automated checks with manual review. Automated checks can determine blocking decisions, citation syntax, source membership, and latency. Hallucination and claim support may require human verification unless a reliable claim-level evaluator is implemented.
 
-### 6.3 Protected Pipeline Results
+## 6.2 Component Validation Completed
 
-Report the same metrics after applying all guardrail layers.
+The following component tests have already been completed.
 
-### 6.4 Safety Improvement
+### PDF extraction
+
+All four knowledge-base documents were processed successfully.
+
+```text
+Extracted pages: 252
+Processed documents: 4
+```
+
+### Chunking
+
+The chunking test produced:
+
+```text
+Created chunks: 265
+```
+
+Breakdown:
+
+| Document | Chunks |
+|---|---:|
+| NIST Adversarial Machine Learning | 137 |
+| NIST Generative AI Profile | 67 |
+| OWASP Clean Reference | 13 |
+| NIST AI RMF 1.0 | 48 |
+
+### Vector database construction
+
+The persistent database was built successfully:
+
+```text
+Records stored: 265
+```
+
+The embedding model used the Apple MPS device during local testing.
+
+### Semantic retrieval
+
+Representative retrieval tests returned the expected sources.
+
+**Question**
+
+```text
+What are the four functions of the NIST AI Risk Management Framework?
+```
+
+The top result was from `nist.ai.100-1.pdf` and contained:
+
+```text
+GOVERN, MAP, MEASURE, and MANAGE
+```
+
+**Question**
+
+```text
+What is prompt injection in an LLM application?
+```
+
+The top result was the OWASP Prompt Injection section.
+
+**Question**
+
+```text
+What is excessive agency and how can it be mitigated?
+```
+
+The top result was the OWASP Excessive Agency section.
+
+Observed interactive retrieval latency varied between approximately 100 ms and 800 ms depending on model warm-up and execution state. These observations are preliminary and are not the final benchmark.
+
+### Guardrail unit tests
+
+The pytest execution completed with:
+
+```text
+4 passed
+```
+
+The tests cover:
+
+- safe input acceptance;
+- multiple complex jailbreak/injection examples;
+- safe output acceptance;
+- output leakage and toxicity blocking.
+
+Deprecation warnings from imported native dependencies were present but did not cause test failures.
+
+## 6.3 Baseline Results
+
+> **Status: pending final integrated execution**
+
+This section will contain:
+
+- number and rate of unsafe baseline responses;
+- successful jailbreaks;
+- hallucinated answers;
+- fabricated citations;
+- baseline generation latency;
+- errors and timeouts.
+
+No values should be inserted until the automated runner has executed the complete dataset against the direct Ollama baseline.
+
+## 6.4 Protected Pipeline Results
+
+> **Status: pending final integrated execution**
+
+This section will report the same metrics after applying all Safety Sentinel layers.
+
+## 6.5 Safety Improvement
+
+The final table will use the following structure:
 
 | Metric | Unprotected SLM | Safety Sentinel | Improvement |
-|---|---|---|---|
-| Unsafe Output Rate | … | … | … |
-| Jailbreak Success Rate | … | … | … |
-| Correct Refusal Rate | … | … | … |
-| False Positive Rate | … | … | … |
+|---|---:|---:|---:|
+| Unsafe Output Rate | TBD | TBD | TBD |
+| Attack Success Rate | TBD | TBD | TBD |
+| Safe Refusal Rate | TBD | TBD | TBD |
+| False Positive Rate | TBD | TBD | TBD |
 
-### 6.5 Hallucination Reduction
+## 6.6 Hallucination Reduction
 
 | Metric | Unprotected SLM | Safety Sentinel | Improvement |
-|---|---|---|---|
-| Hallucination Rate | … | … | … |
-| Grounded Answer Rate | … | … | … |
-| Valid Citation Rate | … | … | … |
-| Correct Abstention Rate | … | … | … |
+|---|---:|---:|---:|
+| Hallucination Rate | TBD | TBD | TBD |
+| Grounded Answer Rate | TBD | TBD | TBD |
+| Valid Citation Rate | TBD | TBD | TBD |
+| Correct Abstention Rate | TBD | TBD | TBD |
 
-### 6.6 Latency Analysis
+## 6.7 Latency Analysis
 
-| Pipeline Component | Mean Latency |
-|---|---|
-| Input guardrail | … ms |
-| Retrieval | … ms |
-| SLM generation | … ms |
-| Output guardrail | … ms |
-| Citation validation | … ms |
-| **Total protected pipeline** | **… ms** |
+| Pipeline component | Mean latency |
+|---|---:|
+| Input guardrail | TBD |
+| Retrieval | TBD |
+| SLM generation | TBD |
+| Output guardrail | TBD |
+| Citation validation | TBD |
+| Total protected pipeline | TBD |
+| Baseline generation | TBD |
 
-Latency overhead formula:
+The final analysis will distinguish cold-start behavior from warmed execution when relevant.
 
-```
-Overhead (%) = (protected_latency − baseline_latency) / baseline_latency × 100
-```
+## 6.8 Qualitative Case Studies
 
-### 6.7 Qualitative Case Studies
+The final report should include at least:
 
-Provide at least four cases:
+1. a blocked jailbreak;
+2. a benign prompt accepted by the input guardrail;
+3. a factual question hallucinated by the baseline;
+4. a grounded protected answer with valid sources;
+5. an unsupported question producing correct abstention;
+6. a detected invalid citation or leakage attempt.
 
-1. **Blocked jailbreak** — A malicious prompt correctly intercepted
-2. **Accepted legitimate request** — A safe prompt correctly allowed through
-3. **Hallucination in baseline** — A factual question where the unprotected model fabricates an answer
-4. **Correct abstention** — A question with no knowledge base coverage, correctly refused by Safety Sentinel
-
-For each case report:
-
-- Prompt
-- Baseline response
-- Protected response
-- Retrieved documents
-- Guardrail decision
-- Brief commentary
+Each case should show the prompt, baseline response, protected response, retrieved chunks, guardrail decisions, and a short interpretation.
 
 ---
 
-## Chapter 7 — Discussion
+# Chapter 7 – Discussion
 
-### 7.1 Interpretation of Results
+## 7.1 Preliminary Interpretation
 
-Discuss whether the safety improvement justifies the increase in latency. Analyze trade-offs quantitatively.
+The completed component tests demonstrate that a local, source-aware retrieval layer can be built with a modest implementation footprint. The system can reconstruct its vector database from four verified documents, retrieve relevant NIST and OWASP passages, and preserve metadata needed for citations.
 
-### 7.2 Strengths
+These results validate the infrastructure but do not yet prove that hallucinations are reduced in the final generated answers. That conclusion requires integrated execution through Gemma 2B and comparison with the baseline.
 
-- Modular architecture
-- Model-independence
-- Local execution
-- Improved traceability
-- Source-supported responses
-- Configurable policies
+The guardrail tests also demonstrate that deterministic checks can detect selected attack patterns. They do not establish robustness against adaptive attackers, paraphrased attacks, multilingual inputs, or semantically complex requests.
 
-### 7.3 Limitations
+## 7.2 Strengths
 
-The system must not be presented as absolute protection. Realistic limitations include:
+### Modularity
 
-- Keyword filter easily bypassed by synonyms
-- Classifier errors and adversarial blind spots
-- Retrieval not always relevant
-- Verified documents may still be incomplete
-- Correct citation does not guarantee correct interpretation
-- Latency overhead
-- Risk of knowledge-base poisoning
-- Difficulty recognizing sophisticated jailbreaks
-- Hallucinations cannot be completely eliminated
+Model access, guardrails, retrieval, API exposure, and testing are separated into distinct modules. This makes individual layers replaceable and independently testable.
 
-### 7.4 Security Considerations
+### Local execution
 
-Discuss:
+Both retrieval and intended generation operate locally. This reduces external service dependencies and permits direct latency measurement.
 
-- Log protection and access control
-- Document sanitization before ingestion
-- Prompt injection originating from knowledge base content
-- Access control to configurations and endpoints
-- Policy update procedures
-- Personal data handling
-- Strict separation between system instructions and retrieved content
+### Traceability
+
+Each chunk preserves source filename, page number, and chunk index. This supports transparent retrieval results and future citation validation.
+
+### Reproducibility
+
+The ChromaDB directory is generated by script rather than committed as an opaque artifact. Given the same documents, model, and parameters, another developer can rebuild the index.
+
+### Transparent first-line defense
+
+Keyword, regex, and heuristic checks provide explainable decisions. A rejection can be associated with a specific matched pattern rather than an opaque classifier score.
+
+### Verified corpus
+
+The knowledge base is intentionally small and curated. This supports manual verification and reduces uncontrolled data provenance.
+
+## 7.3 Limitations
+
+### Keyword-filter limitations
+
+Deterministic blocklists are vulnerable to synonyms, paraphrases, languages not covered by the policy, and novel obfuscation. They can also block legitimate educational security questions.
+
+### Inactive semantic safety classifier
+
+The output-classifier hook exists but is not active. Current output filtering cannot be described as classifier-based moderation.
+
+### Retrieval limitations
+
+A top-ranked chunk may be incomplete, semantically related but not answer-bearing, or contaminated by headers and footers. The current chunker is word-based and does not use document headings or semantic boundaries.
+
+### No retrieval threshold
+
+The current retriever returns the top `k` results even when all results are weak. Correct abstention may therefore require an explicit distance threshold or a separate context-sufficiency check.
+
+### Citation validation pending
+
+Source and page metadata are available, but the final validator has not yet been implemented. Until then, the model may still produce unsupported citations.
+
+### Small knowledge base
+
+Four documents provide controlled evaluation but limited domain coverage. Questions outside the corpus should be refused rather than treated as general-knowledge requests in protected mode.
+
+### Model and prompt sensitivity
+
+Results obtained with `gemma:2b` and a particular prompt template may not generalize to other models or parameter settings.
+
+### Latency overhead
+
+Embedding a query, searching ChromaDB, constructing context, and checking output add processing time. The final experiment must determine whether the safety improvement justifies this overhead.
+
+## 7.4 Security Considerations
+
+### Knowledge-base poisoning
+
+Only reviewed documents should be indexed. Source hashes and version metadata would strengthen integrity checking.
+
+### Indirect prompt injection
+
+Retrieved text must be treated as data, not as executable instructions. The grounded prompt should explicitly state that instructions found inside sources are untrusted.
+
+### Log protection
+
+Audit logs may contain attack prompts and generated content. They should not be publicly committed and should have a retention policy.
+
+### Secret separation
+
+Credentials and sensitive configuration must not be embedded in system prompts. External application controls should enforce authorization.
+
+### Denial of service
+
+The API should limit prompt length, request frequency, generation length, and processing time.
+
+### Error handling
+
+Timeouts and connection failures should be represented structurally. Returning error strings through the normal response path can complicate monitoring and evaluation.
+
+### Test safety
+
+Red Team prompts should be curated to test policy bypasses without unnecessarily distributing detailed harmful instructions.
 
 ---
 
-## Chapter 8 — Conclusions and Future Work
+# Chapter 8 – Conclusions and Future Work
 
-### 8.1 Conclusions
+## 8.1 Preliminary Conclusions
 
-Summarize:
+The project has established the main foundations of Safety Sentinel.
 
-- The pipeline developed and its architecture
-- Observed reduction in unsafe outputs
-- Reduction in hallucination rate
-- Improvement in abstention capability
-- Performance cost introduced
+A local RAG subsystem has been implemented and validated. It extracts text from verified PDFs, creates overlapping chunks, generates embeddings, stores them in ChromaDB, and retrieves relevant evidence together with source metadata.
 
-### 8.2 Future Work
+The repository also contains an Ollama client, deterministic input/output guardrails, an API skeleton, and automated guardrail tests. These components support the intended architecture but still require final orchestration in `SafetySentinel.run_pipeline()`.
 
-Possible extensions:
+It is therefore possible to conclude that the technical components needed for a protected local SLM application are available. It is not yet possible to claim a measured reduction in unsafe outputs or hallucinations. Those conclusions must be based on the final Red Team comparison.
 
-- Replace keyword filter with a more advanced classifier
-- Integrate NeMo Guardrails or Llama Guard
-- Evaluate with multiple SLMs
-- Multilingual testing
-- Defense against indirect prompt injection
-- Document reranking
-- Automated claim-level verification
-- Signed or versioned knowledge base
-- Monitoring dashboard
-- Evaluation with a larger Red Team dataset
+## 8.2 Future Work and Remaining Activities
+
+### Immediate project activities
+
+Before submission, the team should:
+
+1. integrate the completed `src/rag/` modules into `SafetySentinel`;
+2. remove or adapt the `rag_engine.py` stub;
+3. implement grounded prompt construction;
+4. implement citation validation;
+5. support explicit baseline and protected modes;
+6. create the automatic Red Team runner;
+7. execute all 60 prompts in both modes;
+8. calculate final safety, reliability, and latency metrics;
+9. add qualitative case studies;
+10. replace every `TBD` table entry with measured results.
+
+### Technical extensions
+
+Possible future improvements include:
+
+- semantic or policy-specific safety classifiers;
+- NeMo Guardrails integration;
+- Llama Guard evaluation;
+- multilingual Red Team prompts;
+- metadata filters in ChromaDB;
+- hybrid lexical and semantic retrieval;
+- cross-encoder reranking;
+- semantic chunking based on headings;
+- retrieval-confidence calibration;
+- claim-level source verification;
+- cryptographic hashes for knowledge-base files;
+- detection of indirect prompt injection in retrieved chunks;
+- larger and externally validated Red Team datasets;
+- comparison across multiple SLMs;
+- monitoring dashboards and structured JSON logs.
+
+The long-term value of Safety Sentinel lies in its modularity: stronger filters, retrievers, validators, and local models can be introduced without redesigning the entire application.
+
+---
+
+# References
+
+1. National Institute of Standards and Technology, *Artificial Intelligence Risk Management Framework (AI RMF 1.0)*, NIST AI 100-1, 2023.  
+   <https://nvlpubs.nist.gov/nistpubs/ai/nist.ai.100-1.pdf>
+
+2. National Institute of Standards and Technology, *Artificial Intelligence Risk Management Framework: Generative Artificial Intelligence Profile*, NIST AI 600-1, 2024.  
+   <https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf>
+
+3. National Institute of Standards and Technology, *Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations*, NIST AI 100-2e2025, 2025.  
+   <https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-2e2025.pdf>
+
+4. OWASP GenAI Security Project, *OWASP Top 10 for LLM Applications 2025*.  
+   <https://genai.owasp.org/resource/owasp-top-10-for-llm-applications-2025/>
+
+5. OWASP GenAI Security Project, *LLM01:2025 Prompt Injection*.  
+   <https://genai.owasp.org/llmrisk/llm01-prompt-injection/>
+
+6. OWASP GenAI Security Project, *LLM09:2025 Misinformation*.  
+   <https://genai.owasp.org/llmrisk/llm09-overreliance/>
+
+7. Chroma, *Chroma Documentation: Persistent Clients, Collections, and Querying*.  
+   <https://docs.trychroma.com/docs/run-chroma/clients>  
+   <https://docs.trychroma.com/docs/collections/add-data>  
+   <https://docs.trychroma.com/docs/querying-collections/query-and-get>
+
+8. Sentence Transformers, *Documentation and Semantic Search*.  
+   <https://www.sbert.net/>  
+   <https://www.sbert.net/examples/sentence_transformer/applications/semantic-search/README.html>
+
+9. PyMuPDF, *Text Extraction Documentation*.  
+   <https://pymupdf.readthedocs.io/en/latest/recipes-text.html>
+
+10. NVIDIA, *NeMo Guardrails Documentation*.  
+    <https://docs.nvidia.com/nemo-guardrails/index.html>
+
+11. Meta AI, *Llama Guard and Responsible AI Resources*.  
+    <https://ai.meta.com/blog/meta-llama-3/>
+
+12. Safety Sentinel project repository.  
+    <https://github.com/cappiellobelisario02/urban_security2026_cappiello_scalise>
