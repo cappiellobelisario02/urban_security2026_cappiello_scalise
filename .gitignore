@@ -9,3 +9,5 @@ chroma_db/
 data/security_audit.log
 .DS_Store
 Thumbs.db
+# Local ChromaDB vector database
+data/chroma_db/
