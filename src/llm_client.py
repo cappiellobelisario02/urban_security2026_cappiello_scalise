@@ -30,7 +30,7 @@ class OllamaClient:
             response = requests.post(
                 self.ollama_url,
                 json={
-                    "model": "llama2",  # Assuming llama2 is the desired model
+                    "model": "gemma:2b",  # Changed to gemma:2b as per documentation
                     "prompt": prompt,
                     "stream": False,
                 },

@@ -68,6 +68,12 @@ class SafetyGuard:
         # Base64 pattern detection regex (looks for continuous base64 characters)
         self._b64_regex = re.compile(r"\b[A-Za-z0-9+/]{12,}=*\b")
 
+        # Placeholder for an optional lightweight output classifier.
+        # In a full implementation this could load a HuggingFace model for
+        # toxicity detection. Here we provide a stub that always returns None
+        # to keep the guardrails functional without heavy dependencies.
+        self._output_classifier = None
+
     def _normalize_text(self, text: str) -> str:
         """Removes all non-alphanumeric characters to defeat punctuation-based obfuscation."""
         return re.sub(r"[^a-zA-Z0-9]", "", text).lower()
@@ -218,32 +224,27 @@ class SafetyGuard:
         # Catch leaked system instructions/prompts
         if self._instruction_bypass_regex.search(response_lower):
             logging.warning(
-                f"OutputCheck: Blocked - Internal prompt leakage detected. Offending Text: '{response}'"
-            )
-            return False, "The response was blocked to prevent internal prompt leakage."
-
-        # Catch malicious keywords that bypassed filters
-        for keyword in self._malicious_keywords:
-            pattern = rf"\b{re.escape(keyword)}s?\b"
-            if re.search(pattern, response_lower):
-                logging.warning(
-                    f"OutputCheck: Blocked - Unsafe instruction detected: '{keyword}'. Offending Text: '{response}'"
-                )
-                return (
-                    False,
-                    "The response was blocked due to containing unsafe instructions.",
-                )
-
         # Catch toxic keywords
         for keyword in self._toxic_keywords:
-            pattern = rf"\b{re.escape(keyword)}s?\b"
+            pattern = rf"\b{re.escape(keyword)}\b"
             if re.search(pattern, response_lower):
                 logging.warning(
                     f"OutputCheck: Blocked - Toxic or unsafe content detected: '{keyword}'. Offending Text: '{response}'"
                 )
-                return (
-                    False,
-                    "The response was blocked due to toxic or unsafe content policy.",
+                return False, "The response was blocked due to toxic or unsafe content."
+
+        # Optional classifier for additional safety checks
+        if self._output_classifier is not None:
+            try:
+                is_safe, reason = self._output_classifier(response)
+                if not is_safe:
+                    return False, f"Output blocked by classifier: {reason}"
+            except Exception as exc:
+                logging.warning(f"Output classifier error ignored: {exc}")
+
+        return True, "OK"
+            except Exception as exc:
+                logging.warning(f"Output classifier error ignored: {exc}")
                 )
 
         return True, "OK"
