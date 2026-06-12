@@ -27,11 +27,13 @@ class OllamaClient:
         """
         # [ReliabilityAgent]: Implement Timeout and ConnectionError handling.
         try:
+            # Guard against empty prompts which Ollama may reject or return empty response.
+            effective_prompt = prompt if prompt else "[No prompt provided]"
             response = requests.post(
                 self.ollama_url,
                 json={
                     "model": "gemma:2b",  # Changed to gemma:2b as per documentation
-                    "prompt": prompt,
+                    "prompt": effective_prompt,
                     "stream": False,
                 },
                 timeout=self.timeout,

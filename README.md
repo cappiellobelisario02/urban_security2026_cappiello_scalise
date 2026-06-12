@@ -1,131 +1,94 @@
-# Safety Sentinel: LLM Guardrails & Anti-Hallucination RAG
+# Safety Sentinel
 
-## Introduction
-
-The Safety Sentinel project provides a robust middleware pipeline designed to enhance the safety and reliability of interactions with Small Language Models (SLMs). It integrates essential components like advanced I/O Guardrails to prevent LLM jailbreaks and toxic outputs, and an Anti-Hallucination RAG (Retrieval-Augmented Generation) layer to ground responses in factual knowledge, thereby reducing the risk of generating inaccurate or misleading information.
-
-This system acts as a crucial defense layer, ensuring that user prompts are safe and compliant before reaching the SLM, and that the SLM's responses adhere to safety policies and remain accurate. By combining proactive input filtering with reactive output validation and factual retrieval, Safety Sentinel aims to create a more secure and trustworthy SLM application.
+## Overview
+Safety Sentinel is a Retrieval‑Augmented Generation (RAG) system that uses a local
+LLM (Ollama Gemma 2B) and a knowledge base built from PDF documents.  The
+pipeline includes strict input and output guardrails to prevent prompt injection,
+toxic content, and system‑prompt leakage.
 
 ## Prerequisites
+* **Python 3.13** (the project is tested with the bundled Python version).
+* **Ollama** installed and running locally.  Follow the official guide to
+  install Ollama and pull the `gemma:2b` model:
+  ```
+  ollama pull gemma:2b
+  ```
+* **Git** (optional, for cloning the repository).
 
-To set up and run the Safety Sentinel locally, you will need:
-
-*   **Python 3.11** (or newer) installed on your system.
-*   **Ollama**, a platform for running large language models locally.
-*   **FastAPI** and **Uvicorn** (included in `requirements.txt`).
-
-## Local Environment Setup
-
-Follow the instructions below for your specific operating system to set up the environment and install Ollama.
-
-### Windows
-
-1.  **Open PowerShell or Command Prompt.**
-2.  **Create a Python virtual environment:**
-    ```bash
-    py -3.11 -m venv venv
-    ```
-3.  **Activate the virtual environment:**
-    ```bash
-    .\venv\Scripts\activate
-    ```
-4.  **Install Ollama:**
-    *   Download the official Windows installer from the [Ollama website](https://ollama.com/download/windows).
-    *   Run the installer and follow the on-screen instructions.
-    *   Verify installation by running `ollama run llama2` in a new terminal.
-
-### macOS
-
-1.  **Open Terminal.**
-2.  **Create a Python virtual environment:**
-    ```bash
-    python3.11 -m venv venv
-    ```
-3.  **Activate the virtual environment:**
-    ```bash
-    source venv/bin/activate
-    ```
-4.  **Install Ollama:**
-    *   **Using Homebrew (recommended):**
-        ```bash
-        brew install ollama
-        ```
-    *   **Manual Download:** Download and install the application from the [Ollama website](https://ollama.com/download/mac).
-    *   Verify installation by running `ollama run llama2`.
-
-### Linux
-
-1.  **Open Terminal.**
-2.  **Create a Python virtual environment:**
-    ```bash
-    python3.11 -m venv venv
-    ```
-3.  **Activate the virtual environment:**
-    ```bash
-    source venv/bin/activate
-    ```
-4.  **Install Ollama:**
-    ```bash
-    curl -fsSL https://ollama.com/install.sh | sh
-    ```
-    *   Verify installation by running `ollama run llama2`.
-
-## Dependencies
-
-Once your virtual environment is activated, install the required Python dependencies, including FastAPI and Uvicorn:
-
+## Installation
 ```bash
+# Clone the repository (if you haven't already)
+git clone https://github.com/cappiellobelisario02/urban_security2026_cappiello_scalise.git
+cd safety_sentinel
+
+# Create a virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate   # on Windows: .venv\Scripts\activate
+
+# Install the required Python packages
 pip install -r requirements.txt
 ```
 
-## Model Initialization
+The `requirements.txt` includes:
+* `requests` – HTTP client for Ollama.
+* `sentence‑transformers` – embedding model used by the vector store.
+* `chromadb` – local vector database (a lightweight stub is provided for CI).
+* `pymupdf` – PDF loading utilities.
+* Test dependencies (`pytest`).
 
-Before running the application, you need to pull and run the local language model using Ollama. We recommend `gemma:2b`:
-
+## Building the Knowledge Base
+The knowledge base is created from the PDFs located in `data/knowledge_base/`.
+Run the builder script:
 ```bash
-ollama run gemma:2b
+python scripts/build_knowledge_base.py
 ```
+This will:
+1. Load all PDF pages.
+2. Chunk the text (default 500 tokens with 80‑token overlap).
+3. Generate embeddings using `sentence‑transformers/all‑MiniLM‑L6‑v2`.
+4. Store the chunks in a local ChromaDB instance.
 
-Ensure this model is running in the background or in a separate terminal before executing the `Safety Sentinel`.
-
-## How to Run
-
-To start the Safety Sentinel REST API development server, ensure your virtual environment is activated and run:
-
+## Running the Retrieval Test
+After the knowledge base is built you can test the retrieval pipeline:
 ```bash
-uvicorn src.api:app --reload
+echo "What is AI risk management?" | python scripts/test_retrieval.py
 ```
+The script will:
+* Load the vector store.
+* Retrieve the most relevant chunks for the supplied question.
+* Pass the enriched prompt to the Ollama client.
+* Apply the safety guardrails before returning the response.
 
-Output logs, including security audit warnings and errors, will be appended to `data/security_audit.log`.
-
-## API Endpoints
-
-The Safety Sentinel API provides the following endpoint:
-
-### `POST /api/chat`
-
-Processes a user prompt through the Safety Sentinel pipeline, applies guardrails, and retrieves RAG-augmented responses.
-
-**Request Body (`application/json`):**
-
-```json
-{
-  "user_prompt": "Your question or statement here."
-}
+## Running the Full Test Suite
+All unit tests can be executed with:
+```bash
+pytest -q
 ```
+The suite includes:
+* `tests/test_ollama_client.py` – verifies the Ollama client works and returns a
+  non‑empty response.
+* `tests/test_guardrails.py` – checks both input and output guardrails.
+* The RAG‑related scripts (`test_chunker.py`, `test_retrieval.py`) are exercised
+  via the commands above.
 
-**Example Response (`application/json`):**
+## Logging & Metrics (Section 5.8)
+The orchestrator (`src/main.py`) logs the following information to
+`data/security_audit.log`:
+* Timestamp, latency (ms) for each pipeline run.
+* Input guardrail decision (`InputOK`).
+* Output guardrail decision (`OutputOK`).
+* Any warning messages generated by the guardrails.
 
-```json
-{
-  "status": "success",
-  "response": "The model's safe and augmented response.",
-  "latency_ms": 123.45
-}
-```
+These logs can be parsed to produce the tables required in Chapter 6 of the
+documentation.
 
-### Swagger UI
+## Troubleshooting
+* **Ollama connection errors** – ensure the Ollama server is running on
+  `http://localhost:11434` (default) and that the `gemma:2b` model is pulled.
+* **Missing dependencies** – re‑run `pip install -r requirements.txt`.
+* **ChromaDB import errors** – a lightweight stub is provided; the full library
+  is installed via `pip install chromadb`.
 
-Once the API server is running, you can access the interactive API documentation and test the endpoints directly in your browser by navigating to:
+---
 
-`http://127.0.0.1:8000/docs`
+You are now ready to use Safety Sentinel!
