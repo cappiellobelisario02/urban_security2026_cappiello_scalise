@@ -368,7 +368,9 @@ def main() -> None:
     )
     print()
 
-    sentinel = MockSafetySentinel()
+    # Use the real SafetySentinel pipeline instead of the mock implementation.
+    from src.main import SafetySentinel
+    sentinel = SafetySentinel()
 
     evaluation_start = time.perf_counter()
 

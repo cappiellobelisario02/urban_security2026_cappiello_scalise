@@ -1079,7 +1079,7 @@ A new script should iterate through `red_team_dataset.csv`, run each prompt in b
 
 ---
 
-# Chapter 6 – Testing and Results
+## Chapter 6 — Testing and Results
 
 ## 6.1 Testing Methodology
 

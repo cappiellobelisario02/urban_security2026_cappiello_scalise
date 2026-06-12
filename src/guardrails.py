@@ -229,49 +229,14 @@ class SafetyGuard:
         self._hex_regex = re.compile(r"\b(?:0x)?[0-9a-fA-F]{20,}\b")
 
         # Optional lightweight output classifier.
-        # We attempt to load a small sentiment analysis model that can be used
-        # as a proxy for toxicity detection. If the `transformers` library is
-        # unavailable or the model cannot be downloaded, we gracefully fall
-        # back to a stub that always returns ``None``.
+        # The original implementation attempted to load a sentiment analysis model
+        # (distilbert-base-uncased-finetuned-sst-2-english) as a proxy for
+        # toxicity detection. This is inappropriate because a sentiment classifier
+        # flags neutral or apologetic responses (e.g., "I am sorry, I don't
+        # understand") as NEGATIVE, causing safe outputs to be blocked.
+        # According to the documentation, the output classifier is intended to be
+        # an inactive placeholder. Therefore we disable it entirely.
         self._output_classifier: Optional[callable] = None
-        if pipeline is not None:
-            try:
-                # Using a distilled BERT model fine-tuned on SST-2. The pipeline
-                # returns a list of dicts with ``label`` (POSITIVE/NEGATIVE) and
-                # ``score``. We treat a NEGATIVE label with a confidence > 0.75 as
-                # potentially unsafe and block the output (raised from 0.7).
-                self._sentiment_pipe = pipeline(
-                    "sentiment-analysis",
-                    model="distilbert-base-uncased-finetuned-sst-2-english",
-                    tokenizer="distilbert-base-uncased-finetuned-sst-2-english",
-                )
-
-                def classifier(text: str) -> tuple[bool, str]:
-                    """Classify text sentiment and block only clearly negative output.
-
-                    The HuggingFace pipeline returns a list of dictionaries with a
-                    ``label`` (e.g., ``POSITIVE`` or ``NEGATIVE``) and a ``score``
-                    representing confidence.  We now explicitly check that the
-                    label is ``NEGATIVE`` *and* that the confidence exceeds the
-                    configured threshold (0.75).  Positive or neutral labels are
-                    always allowed, regardless of the confidence score.
-                    """
-                    try:
-                        result = self._sentiment_pipe(text[:512])  # limit length
-                        label = result[0]["label"].upper()
-                        score = result[0]["score"]
-                        # Block only when the model is confident the sentiment is negative
-                        if label == "NEGATIVE" and score > 0.75:
-                            return False, f"Negative sentiment detected (score={score:.2f})"
-                        return True, "OK"
-                    except Exception as exc:  # pragma: no cover
-                        logging.warning(f"Sentiment classifier error: {exc}")
-                        return True, "OK"
-
-                self._output_classifier = classifier
-            except Exception as exc:  # pragma: no cover – model download may fail.
-                logging.warning(f"Failed to load sentiment classifier: {exc}")
-                self._output_classifier = None
 
     def _normalize_text(self, text: str) -> str:
         """Removes all non-alphanumeric characters to defeat punctuation-based obfuscation."""

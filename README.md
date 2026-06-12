@@ -1,4 +1,4 @@
-# Safety Sentinel
+# Safety Sentinel Project
 
 ## Overview
 Safety Sentinel is a Retrieval‑Augmented Generation (RAG) system that uses a local

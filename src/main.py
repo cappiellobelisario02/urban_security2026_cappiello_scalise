@@ -1,6 +1,7 @@
 from src.llm_client import OllamaClient
 from src.guardrails import SafetyGuard
 from src.rag_engine import VectorDB
+from typing import Any
 
 class SafetySentinel:
     """Orchestrator class coordinating the safety guardrails and RAG pipeline."""
@@ -88,6 +89,84 @@ class SafetySentinel:
         if response.startswith("Output blocked:"):
             return False, response
         return True, response
+
+    # ---------------------------------------------------------------------
+    # Compatibility method for the red‑team evaluator.
+    # Returns a detailed result dictionary matching the expected schema.
+    # ---------------------------------------------------------------------
+    def process(self, prompt: str) -> dict[str, Any]:
+        """Execute the full pipeline and return a rich result dict.
+
+        The evaluator expects the following keys:
+        ``blocked``, ``block_reason``, ``response``, ``sources``,
+        ``input_guardrail_latency_ms``, ``retrieval_latency_ms``,
+        ``generation_latency_ms``, ``output_guardrail_latency_ms``,
+        ``total_latency_ms``.
+
+        For now we provide accurate ``blocked`` and ``response`` values and
+        approximate latency metrics. ``sources`` is left empty because the
+        current ``VectorDB`` implementation does not expose source metadata.
+        """
+        import time
+
+        start_total = time.time()
+
+        # Input guardrail timing
+        start_input = time.time()
+        input_ok, input_msg = self.guard.check_input(prompt)
+        input_latency = (time.time() - start_input) * 1000
+        if not input_ok:
+            total_ms = (time.time() - start_total) * 1000
+            return {
+                "blocked": True,
+                "block_reason": input_msg,
+                "response": "",
+                "sources": [],
+                "input_guardrail_latency_ms": input_latency,
+                "retrieval_latency_ms": 0.0,
+                "generation_latency_ms": 0.0,
+                "output_guardrail_latency_ms": 0.0,
+                "total_latency_ms": total_ms,
+            }
+
+        # Retrieval timing
+        start_retrieval = time.time()
+        try:
+            rag_context = self.rag.retrieve_context(prompt)
+        except Exception:
+            rag_context = ""
+        retrieval_latency = (time.time() - start_retrieval) * 1000
+
+        # Generation timing
+        enriched_prompt = (
+            f"Basandoti SOLO su questo contesto {rag_context}, rispondi a {prompt}. Cita le fonti."
+        )
+        start_gen = time.time()
+        llm_response = self.client.generate_response(enriched_prompt)
+        generation_latency = (time.time() - start_gen) * 1000
+
+        # Output guardrail timing
+        start_output = time.time()
+        output_ok, output_msg = self.guard.check_output(llm_response)
+        output_latency = (time.time() - start_output) * 1000
+
+        blocked = not output_ok
+        block_reason = output_msg if blocked else ""
+        final_response = llm_response if not blocked else ""
+
+        total_ms = (time.time() - start_total) * 1000
+
+        return {
+            "blocked": blocked,
+            "block_reason": block_reason,
+            "response": final_response,
+            "sources": [],  # placeholder – source tracking not implemented yet
+            "input_guardrail_latency_ms": input_latency,
+            "retrieval_latency_ms": retrieval_latency,
+            "generation_latency_ms": generation_latency,
+            "output_guardrail_latency_ms": output_latency,
+            "total_latency_ms": total_ms,
+        }
 
 # -------------------------------------------------------------------------
 # Interactive CLI entry point
