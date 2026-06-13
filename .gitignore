@@ -11,3 +11,6 @@ data/security_audit.log
 Thumbs.db
 # Local ChromaDB vector database
 data/chroma_db/
+# Local backups
+data/chroma_db_backup_*/
+venv_py312_backup_*/

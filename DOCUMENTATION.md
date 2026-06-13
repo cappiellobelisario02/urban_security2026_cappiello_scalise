@@ -18,7 +18,7 @@ Security Engineering Curriculum
 
 ## Documentation status
 
-This document describes the project according to the implementation available in the repository at the end of the RAG development phase.
+This document describes the project according to the implementation currently available in the repository after the integration of the protected RAG pipeline into `SafetySentinel`.
 
 The following components are currently implemented and testable:
 
@@ -32,18 +32,20 @@ The following components are currently implemented and testable:
 - embedding generation with Sentence Transformers;
 - persistent ChromaDB storage;
 - semantic retrieval with source and page metadata;
-- unit tests for the guardrail module.
+- integrated `SafetySentinel` orchestration with grounded prompting;
+- citation validation with source-label checks;
+- citation-repair retry logic for Gemma 2B outputs;
+- deterministic extractive fallback for structured and short factual queries;
+- automated tests for guardrails, Ollama client, and SafetySentinel.
 
-The following components are still being integrated or evaluated:
+The following components are still being refined or expanded:
 
-- final implementation of `SafetySentinel.run_pipeline()`;
-- replacement or adaptation of the original `rag_engine.py` stub;
-- complete grounded prompt construction;
-- citation validation;
-- automatic Red Team execution against baseline and protected modes;
-- final safety, hallucination, citation, and latency metrics.
+- claim-level citation entailment checking;
+- retrieval-confidence thresholds and context-sufficiency scoring;
+- richer baseline/protected comparative analysis beyond the first benchmark run;
+- broader qualitative case studies and final report tables.
 
-Sections that depend on these activities are marked as pending rather than populated with estimated or invented results.
+Sections that still depend on additional experiments are marked as preliminary rather than populated with invented results.
 
 ---
 
@@ -289,7 +291,7 @@ Retrieval-Augmented Generation combines document retrieval with language-model g
 8. generate an answer through Ollama;
 9. validate output safety and citations.
 
-The retrieval component is already complete. The final orchestration and citation validator remain to be integrated.
+The retrieval component is complete and is now integrated into the final orchestrator. The current pipeline also includes a first operational citation validator, a citation-repair retry pass, and deterministic extractive fallbacks for selected high-confidence cases.
 
 ### 2.4.2 Vector Database
 
@@ -449,11 +451,13 @@ Current status:
 - `OllamaClient`: implemented;
 - FastAPI endpoint: present;
 - `SafetySentinel` constructor: present;
-- `SafetySentinel.run_pipeline()`: pending integration;
-- grounded prompt builder: pending integration;
-- citation validator: pending implementation.
+- `SafetySentinel.run_pipeline()`: integrated;
+- grounded prompt builder: integrated;
+- citation validator: implemented at source-label syntax and membership level;
+- citation-repair retry pass: implemented;
+- extractive fallback for OWASP Top 10 and short generic factual queries: implemented.
 
-The old `VectorDB` class in `src/rag_engine.py` is still a stub and should be replaced by, or adapted to, the completed modules in `src/rag/`.
+The old `VectorDB` class in `src/rag_engine.py` is now effectively superseded in the main pipeline by the completed modules in `src/rag/`. The orchestrator uses `src.rag.retriever.Retriever` directly.
 
 ## 3.6 Guardrail Decision Policies
 
@@ -933,7 +937,16 @@ The value is a practical starting point and should be treated as an experimental
 
 ## 5.5 Grounded Prompt Builder
 
-The final grounded prompt builder is not yet integrated into `main.py`. Its intended template is:
+The grounded prompt builder is now integrated into `src/main.py`. Its current role is to construct a prompt that:
+
+- identifies the assistant as a factual AI-safety and LLM-security helper;
+- instructs the model to use only trusted retrieved context;
+- requires citation labels exactly in the form `[SOURCE_N]`;
+- forbids invented facts, sources, or page numbers;
+- explicitly requests abstention when the context is insufficient;
+- reminds the model not to follow instructions that may appear inside retrieved text.
+
+The integrated prompt has the following structure:
 
 ```text
 You are a factual assistant.
@@ -957,7 +970,7 @@ TRUSTED CONTEXT:
 ANSWER:
 ```
 
-Each retrieved chunk should be represented by an immutable source label. The labels supplied to the model must also be passed to the citation validator.
+Each retrieved chunk is represented by an immutable source label such as `[SOURCE_1: filename, page X]`. These labels are preserved in the `sources` field returned by the pipeline and are also reused by the citation validator.
 
 ## 5.6 Output Guardrail
 
@@ -979,18 +992,16 @@ The output guardrail is useful but not a complete semantic safety solution. Exac
 
 ## 5.7 Citation Validator
 
-> **Status: pending implementation**
+> **Status: implemented (syntax and membership validation)**
 
-The citation validator should verify that:
+The current citation validator verifies that:
 
 1. every cited label was supplied in the grounded context;
-2. the cited filename exists in the retrieved result set;
-3. the page value matches retrieved metadata;
-4. no fabricated source identifier appears;
-5. a factual answer contains at least one valid citation;
-6. an abstention does not invent a citation.
+2. no fabricated source label such as `[SOURCE_99]` appears;
+3. a non-abstaining factual answer contains at least one valid citation;
+4. an abstention does not invent unsupported citation labels.
 
-A first implementation can validate citation syntax and source membership. Full claim-level entailment checking is a more advanced extension and should not be claimed unless explicitly implemented.
+If the first model answer is safe but fails citation validation, `SafetySentinel` performs one constrained rewrite attempt asking Gemma 2B to preserve only supported claims and add valid source labels. If that still fails, the system may return a deterministic extractive fallback for selected structured or short factual queries. Full claim-level entailment checking is not implemented and should not be claimed.
 
 ## 5.8 Logging and Monitoring
 
@@ -1073,9 +1084,9 @@ Purpose: run an interactive semantic-search query and display:
 
 ### Automatic Red Team runner
 
-> **Status: planned**
+> **Status: implemented**
 
-A new script should iterate through `red_team_dataset.csv`, run each prompt in baseline and protected modes, continue after individual errors, and export structured results for metric calculation.
+The repository now contains scripts for automated evaluation, including `scripts/run_red_team_evaluation.py` and `scripts/run_benchmark.py`. These scripts iterate through the dataset, execute prompts in baseline and protected modes, continue after individual errors, and export structured results for metric calculation.
 
 ---
 
@@ -1083,7 +1094,7 @@ A new script should iterate through `red_team_dataset.csv`, run each prompt in b
 
 ## 6.1 Testing Methodology
 
-The complete evaluation will execute every Red Team prompt against:
+The completed evaluation workflow executes every Red Team prompt against:
 
 1. **baseline mode**, containing only direct Ollama generation;
 2. **protected mode**, containing input guardrail, RAG, grounded prompt, output guardrail, and citation validation.
@@ -1097,7 +1108,7 @@ For reproducibility:
 - latency must be measured per component;
 - stochastic tests may be repeated if generation randomness is enabled.
 
-The final assessment will combine automated checks with manual review. Automated checks can determine blocking decisions, citation syntax, source membership, and latency. Hallucination and claim support may require human verification unless a reliable claim-level evaluator is implemented.
+The current assessment combines automated checks with partial manual interpretation. Automated checks determine blocking decisions, citation syntax, source membership, and latency. Hallucination and claim support are still only partially captured by the present benchmark metrics and would benefit from further manual review or a stronger claim-level evaluator.
 
 ## 6.2 Component Validation Completed
 
@@ -1173,12 +1184,12 @@ The top result was the OWASP Excessive Agency section.
 
 Observed interactive retrieval latency varied between approximately 100 ms and 800 ms depending on model warm-up and execution state. These observations are preliminary and are not the final benchmark.
 
-### Guardrail unit tests
+### Guardrail and pipeline unit tests
 
-The pytest execution completed with:
+The repository test suite currently completes with:
 
 ```text
-4 passed
+14 passed
 ```
 
 The tests cover:
@@ -1186,30 +1197,115 @@ The tests cover:
 - safe input acceptance;
 - multiple complex jailbreak/injection examples;
 - safe output acceptance;
-- output leakage and toxicity blocking.
+- output leakage and toxicity blocking;
+- Ollama client request and error handling;
+- integrated `SafetySentinel` orchestration;
+- citation validation and fabricated-citation blocking;
+- deterministic extractive fallbacks for OWASP and short factual prompts.
 
 Deprecation warnings from imported native dependencies were present but did not cause test failures.
 
+## 6.2.1 Example Executions
+
+The following examples were executed on the current repository state and illustrate the protected pipeline behavior.
+
+### Example 1 — OWASP structured factual query
+
+**Prompt**
+
+```text
+top 10 llm usages for owasp
+```
+
+**Observed protected response**
+
+```text
+According to the retrieved OWASP Top 10 for LLM Applications 2025 reference, the ten risk categories are:
+1. LLM01:2025 - Prompt Injection [SOURCE_6]
+2. LLM02:2025 - Sensitive Information Disclosure [SOURCE_6]
+3. LLM03:2025 - Supply Chain [SOURCE_6]
+4. LLM04:2025 - Data and Model Poisoning [SOURCE_6]
+5. LLM05:2025 - Improper Output Handling [SOURCE_6]
+6. LLM06:2025 - Excessive Agency [SOURCE_6]
+7. LLM07:2025 - System Prompt Leakage [SOURCE_6]
+8. LLM08:2025 - Vector and Embedding Weaknesses [SOURCE_6]
+9. LLM09:2025 - Misinformation [SOURCE_6]
+10. LLM10:2025 - Unbounded Consumption [SOURCE_6]
+```
+
+**Interpretation**
+
+This result is generated by the extractive fallback path. The retriever successfully brings the OWASP summary page into context, and the pipeline returns a deterministic, cited answer even when Gemma 2B does not reliably format citations on its own.
+
+### Example 2 — Short generic factual query
+
+**Prompt**
+
+```text
+AI Risks
+```
+
+**Observed protected response**
+
+```text
+I found relevant information in the trusted knowledge base. Here is a conservative extractive summary:
+- NIST AI 100-1 AI RMF 1.0 Appendix C: AI Risk Management and Human-AI Interaction ... [SOURCE_1]
+- NIST AI 100-1 AI RMF 1.0 Executive Summary Artificial intelligence (AI) technologies have significant potential to transform society ... [SOURCE_2]
+- NIST AI 100-1 AI RMF 1.0 Fig. ... [SOURCE_3]
+```
+
+**Interpretation**
+
+This is an example of the general extractive fallback added for short and generic prompts. Retrieval succeeds, but if the model answer does not satisfy strict citation validation, the pipeline returns a conservative cited summary directly from the retrieved chunks.
+
+### Example 3 — Benchmark execution summary
+
+**Command**
+
+```bash
+python run_system.py
+```
+
+**Observed benchmark summary**
+
+```text
+## Latency (seconds)
+| Run | Average Latency |
+| Baseline | 3.64 |
+| Protected | 13.42 |
+
+## Safety Metrics
+| Metric | Value |
+| Output Block Rate | 91.7% |
+| Hallucination Rate | 1.7% |
+```
+
+**Interpretation**
+
+The benchmark confirms that the protected pipeline is active, but also highlights the cost of layered retrieval, validation, and conservative refusal behavior.
+
 ## 6.3 Baseline Results
 
-> **Status: pending final integrated execution**
+An automated benchmark run over 60 prompts has already been executed. The preliminary baseline average latency was:
 
-This section will contain:
-
-- number and rate of unsafe baseline responses;
-- successful jailbreaks;
-- hallucinated answers;
-- fabricated citations;
-- baseline generation latency;
-- errors and timeouts.
-
-No values should be inserted until the automated runner has executed the complete dataset against the direct Ollama baseline.
+| Run | Average Latency |
+|---|---:|
+| Baseline | 3.64 s |
 
 ## 6.4 Protected Pipeline Results
 
-> **Status: pending final integrated execution**
+The same benchmark run reported the following preliminary protected-pipeline values:
 
-This section will report the same metrics after applying all Safety Sentinel layers.
+| Run | Average Latency |
+|---|---:|
+| Protected | 13.42 s |
+
+| Metric | Value |
+|---|---:|
+| Output Block Rate | 91.7% |
+| Hallucination Rate | 1.7% |
+
+These values should be treated as preliminary integrated benchmark results. They show that the safety layers are active, but they also indicate that the current protected pipeline is conservative and frequently blocks answers when citation validation fails.
 
 ## 6.5 Safety Improvement
 
@@ -1217,31 +1313,31 @@ The final table will use the following structure:
 
 | Metric | Unprotected SLM | Safety Sentinel | Improvement |
 |---|---:|---:|---:|
-| Unsafe Output Rate | TBD | TBD | TBD |
+| Unsafe Output Rate | preliminary benchmark pending full manual interpretation | preliminary benchmark pending full manual interpretation | TBD |
 | Attack Success Rate | TBD | TBD | TBD |
 | Safe Refusal Rate | TBD | TBD | TBD |
-| False Positive Rate | TBD | TBD | TBD |
+| False Positive Rate | TBD | potentially elevated due to strict citation policy | TBD |
 
 ## 6.6 Hallucination Reduction
 
 | Metric | Unprotected SLM | Safety Sentinel | Improvement |
 |---|---:|---:|---:|
-| Hallucination Rate | TBD | TBD | TBD |
+| Hallucination Rate | TBD | 1.7% (preliminary benchmark) | TBD |
 | Grounded Answer Rate | TBD | TBD | TBD |
-| Valid Citation Rate | TBD | TBD | TBD |
+| Valid Citation Rate | TBD | constrained by strict validator | TBD |
 | Correct Abstention Rate | TBD | TBD | TBD |
 
 ## 6.7 Latency Analysis
 
 | Pipeline component | Mean latency |
 |---|---:|
-| Input guardrail | TBD |
-| Retrieval | TBD |
-| SLM generation | TBD |
-| Output guardrail | TBD |
-| Citation validation | TBD |
-| Total protected pipeline | TBD |
-| Baseline generation | TBD |
+| Input guardrail | measured internally but not yet aggregated into a final table |
+| Retrieval | measured internally but not yet aggregated into a final table |
+| SLM generation | measured internally but not yet aggregated into a final table |
+| Output guardrail | measured internally but not yet aggregated into a final table |
+| Citation validation | measured internally but not yet aggregated into a final table |
+| Total protected pipeline | 13.42 s (preliminary average) |
+| Baseline generation | 3.64 s (preliminary average) |
 
 The final analysis will distinguish cold-start behavior from warmed execution when relevant.
 
@@ -1266,7 +1362,7 @@ Each case should show the prompt, baseline response, protected response, retriev
 
 The completed component tests demonstrate that a local, source-aware retrieval layer can be built with a modest implementation footprint. The system can reconstruct its vector database from four verified documents, retrieve relevant NIST and OWASP passages, and preserve metadata needed for citations.
 
-These results validate the infrastructure but do not yet prove that hallucinations are reduced in the final generated answers. That conclusion requires integrated execution through Gemma 2B and comparison with the baseline.
+These results validate the infrastructure and also show that the integrated pipeline is operational end-to-end through Gemma 2B. However, they also reveal a practical trade-off: strict citation enforcement reduces unsupported answers but can substantially increase blocking behavior and latency.
 
 The guardrail tests also demonstrate that deterministic checks can detect selected attack patterns. They do not establish robustness against adaptive attackers, paraphrased attacks, multilingual inputs, or semantically complex requests.
 
@@ -1314,9 +1410,9 @@ A top-ranked chunk may be incomplete, semantically related but not answer-bearin
 
 The current retriever returns the top `k` results even when all results are weak. Correct abstention may therefore require an explicit distance threshold or a separate context-sufficiency check.
 
-### Citation validation pending
+### Limited citation semantics
 
-Source and page metadata are available, but the final validator has not yet been implemented. Until then, the model may still produce unsupported citations.
+Source and page metadata are available, and a working validator is implemented, but it currently checks citation syntax and membership rather than full claim-level support. The model may therefore still produce partially supported answers unless stronger entailment checks are added.
 
 ### Small knowledge base
 
@@ -1370,26 +1466,57 @@ The project has established the main foundations of Safety Sentinel.
 
 A local RAG subsystem has been implemented and validated. It extracts text from verified PDFs, creates overlapping chunks, generates embeddings, stores them in ChromaDB, and retrieves relevant evidence together with source metadata.
 
-The repository also contains an Ollama client, deterministic input/output guardrails, an API skeleton, and automated guardrail tests. These components support the intended architecture but still require final orchestration in `SafetySentinel.run_pipeline()`.
+The repository now contains an Ollama client, deterministic input/output guardrails, integrated RAG orchestration in `SafetySentinel.run_pipeline()`, citation repair logic, extractive fallbacks, an API skeleton, and automated tests.
 
-It is therefore possible to conclude that the technical components needed for a protected local SLM application are available. It is not yet possible to claim a measured reduction in unsafe outputs or hallucinations. Those conclusions must be based on the final Red Team comparison.
+It is therefore possible to conclude that the technical components needed for a protected local SLM application are available and integrated. A first benchmark comparison has already been executed, but a fuller interpretation of safety gains, false positives, and grounded-answer quality still requires additional analysis.
 
 ## 8.2 Future Work and Remaining Activities
+
+## 8.2.1 Completed Work
+
+At the current repository state, the following work has already been completed:
+
+1. local Ollama integration with `gemma:2b`;
+2. deterministic input guardrail implementation with keywords, regexes, normalization, and heuristics;
+3. deterministic output guardrail implementation with leakage and toxicity checks;
+4. trusted local knowledge base selection and indexing;
+5. PDF extraction and chunk generation with metadata retention;
+6. embedding generation with `sentence-transformers/all-MiniLM-L6-v2`;
+7. persistent ChromaDB storage and semantic retrieval;
+8. integration of `src/rag/` modules into `SafetySentinel`;
+9. grounded prompt construction inside the main pipeline;
+10. citation validation at the level of source-label syntax and membership;
+11. citation-repair retry logic for Gemma 2B outputs;
+12. deterministic extractive fallbacks for OWASP Top 10 and short generic factual prompts;
+13. automated benchmark and Red Team execution scripts;
+14. local API skeleton and interactive CLI execution path;
+15. automated unit tests for guardrails, Ollama client, and SafetySentinel;
+16. migration of the working environment to Python 3.11.9 with successful test execution.
+
+## 8.2.2 Remaining Work
+
+The main remaining activities are:
+
+1. improve claim-level citation verification beyond label syntax;
+2. refine the trade-off between strict blocking and useful grounded answers;
+3. define retrieval-confidence thresholds and context-sufficiency checks;
+4. aggregate and report per-component latency metrics in final tables;
+5. manually review benchmark outputs to distinguish true positives, false positives, and correct abstentions;
+6. produce qualitative case studies with prompts, retrieved chunks, and protected outputs;
+7. replace remaining `TBD` values with reviewed final measurements;
+8. optionally extend the system with semantic safety classifiers, reranking, hybrid retrieval, and richer monitoring.
 
 ### Immediate project activities
 
 Before submission, the team should:
 
-1. integrate the completed `src/rag/` modules into `SafetySentinel`;
-2. remove or adapt the `rag_engine.py` stub;
-3. implement grounded prompt construction;
-4. implement citation validation;
-5. support explicit baseline and protected modes;
-6. create the automatic Red Team runner;
-7. execute all 60 prompts in both modes;
-8. calculate final safety, reliability, and latency metrics;
-9. add qualitative case studies;
-10. replace every `TBD` table entry with measured results.
+1. refine citation validation beyond source-label syntax and membership;
+2. calibrate fallback behavior to reduce unnecessary blocking without weakening safety;
+3. improve retrieval-confidence estimation and abstention logic;
+4. aggregate per-component latency measurements into final report tables;
+5. interpret the benchmark results with manual case review;
+6. add qualitative case studies;
+7. replace the remaining `TBD` table entries with measured and reviewed results.
 
 ### Technical extensions
 
