@@ -454,6 +454,21 @@ class SafetyGuard:
             )
             return False, "Prompt leakage detected."
 
+        repair_prompt_leakage_markers = (
+            "mandatory rules:",
+            "trusted context:",
+            "draft answer:",
+            "rewritten answer with valid citations",
+            "keep only claims supported by the trusted context",
+            "add source labels exactly in the form",
+            "use only source labels that appear in the trusted context",
+        )
+        if any(marker in response_lower for marker in repair_prompt_leakage_markers):
+            logging.warning(
+                f"OutputCheck: Blocked - Repair-prompt leakage detected. Offending Text: '{response[:200]}'"
+            )
+            return False, "Repair prompt leakage detected."
+
         # Catch toxic keywords
         for keyword in self._toxic_keywords:
             pattern = rf"\b{re.escape(keyword)}\b"

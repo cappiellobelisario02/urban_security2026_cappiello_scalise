@@ -71,6 +71,17 @@ class TestSafetyGuard(unittest.TestCase):
         self.assertFalse(is_safe2)
         self.assertIn("toxic or unsafe", message2.lower())
 
+    def test_check_output_blocks_repair_prompt_leakage(self) -> None:
+        response = (
+            "Mandatory rules:\n"
+            "1. Keep only claims supported by the trusted context.\n"
+            "TRUSTED CONTEXT:\n"
+            "[SOURCE_1: doc.pdf, page 4]"
+        )
+        is_safe, message = self.guard.check_output(response)
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Repair prompt leakage detected.")
+
 
 if __name__ == "__main__":
     unittest.main()
