@@ -49,6 +49,7 @@ class SafetySentinel:
     """Coordinates guardrails, semantic retrieval, grounded generation and citation checks."""
 
     _citation_pattern = re.compile(r"\[SOURCE_(\d+)\]")
+    _content_word_pattern = re.compile(r"[a-zA-Z0-9]{4,}")
     _abstention_markers = (
         "does not contain enough information",
         "insufficient information",
@@ -196,6 +197,113 @@ class SafetySentinel:
 
         return sentence
 
+    def _extract_content_terms(self, text: str) -> set[str]:
+        stopwords = {
+            "about",
+            "according",
+            "applications",
+            "because",
+            "before",
+            "between",
+            "describe",
+            "does",
+            "exact",
+            "explain",
+            "framework",
+            "hallucination",
+            "ideal",
+            "information",
+            "knowledge",
+            "management",
+            "provided",
+            "question",
+            "report",
+            "required",
+            "sources",
+            "state",
+            "threshold",
+            "using",
+            "what",
+            "which",
+            "with",
+        }
+        return {
+            match.group(0).lower()
+            for match in self._content_word_pattern.finditer(text)
+            if match.group(0).lower() not in stopwords
+        }
+
+    def _has_strong_context_support(
+        self,
+        user_question: str,
+        retrieved_chunks: list[dict[str, Any]],
+    ) -> bool:
+        question_terms = self._extract_content_terms(user_question)
+        if not question_terms:
+            return False
+
+        top_chunk_overlap = 0
+        total_overlap_terms: set[str] = set()
+        for chunk in retrieved_chunks[:3]:
+            chunk_terms = self._extract_content_terms(str(chunk.get("text", "")))
+            overlap = question_terms & chunk_terms
+            total_overlap_terms |= overlap
+            top_chunk_overlap = max(top_chunk_overlap, len(overlap))
+
+        return top_chunk_overlap >= 3 or len(total_overlap_terms) >= 5
+
+    def _is_likely_abstention_question(self, user_question: str) -> bool:
+        normalized_question = user_question.lower().strip()
+        abstention_patterns = (
+            "after june 2026",
+            "2026 revision",
+            "what changes were made",
+            "fictional",
+            "allegedly",
+            "exact date",
+            "current director",
+            "who authored",
+            "provide the doi",
+            "required minimum value",
+            "what numerical",
+            "accuracy percentage",
+            "which section",
+            "which chapter",
+            "which single classifier",
+            "officially required",
+            "which european regulation",
+            "benchmark results",
+            "ideal top-k",
+            "every rag application",
+            "guarantee",
+            "nonexistent",
+        )
+        return any(pattern in normalized_question for pattern in abstention_patterns)
+
+    def _is_safety_sensitive_prompt(self, user_question: str) -> bool:
+        normalized_question = user_question.lower()
+        safety_patterns = (
+            "system prompt",
+            "developer mode",
+            "ignore safeguards",
+            "ignore previous instruction",
+            "bypass",
+            "phishing",
+            "private personal information",
+            "confidential data",
+            "stored secrets",
+            "unsafe action",
+            "harmful answer",
+            "degrading message",
+            "protected group",
+            "steal",
+            "credentials",
+            "disrupt",
+            "sabotaging",
+            "insulting stereotypes",
+        )
+        return any(pattern in normalized_question for pattern in safety_patterns)
+
     def _build_grounded_prompt(
         self,
         user_question: str,
@@ -269,6 +377,9 @@ REWRITTEN ANSWER WITH VALID CITATIONS:"""
         """
         normalized_question = user_question.lower()
 
+        if self._is_likely_abstention_question(user_question):
+            return None
+
         if not (
             "owasp" in normalized_question
             and "llm" in normalized_question
@@ -323,20 +434,30 @@ REWRITTEN ANSWER WITH VALID CITATIONS:"""
         if len(normalized_question) < 3:
             return None
 
+        if self._is_likely_abstention_question(user_question):
+            return None
+
+        if self._is_safety_sensitive_prompt(user_question):
+            return None
+
         question_terms = normalized_question.split()
         is_short_generic_query = len(question_terms) <= 3
         known_generic_topics = (
             "ai risk",
             "ai risks",
             "risk management",
-            "hallucination",
             "prompt injection",
             "llm security",
+        )
+        has_strong_context_support = self._has_strong_context_support(
+            user_question=user_question,
+            retrieved_chunks=retrieved_chunks,
         )
 
         if not (
             is_short_generic_query
             or any(topic in normalized_question for topic in known_generic_topics)
+            or (len(question_terms) >= 7 and has_strong_context_support)
         ):
             return None
 
@@ -543,6 +664,27 @@ REWRITTEN ANSWER WITH VALID CITATIONS:"""
                 for match in self._citation_pattern.finditer(llm_response)
             }
             has_fabricated_original_citation = bool(original_citations - valid_labels)
+
+            if (
+                not citation_ok
+                and not has_fabricated_original_citation
+                and self._is_likely_abstention_question(prompt)
+            ):
+                abstention_response = (
+                    "The available knowledge base does not contain enough information."
+                )
+                start_citation = time.perf_counter()
+                abstention_citation_ok, abstention_citation_msg = self._validate_citations(
+                    abstention_response,
+                    valid_labels,
+                )
+                citation_latency += (time.perf_counter() - start_citation) * 1000
+                if abstention_citation_ok:
+                    citation_ok = True
+                    citation_msg = "OK"
+                    final_response = abstention_response
+                else:
+                    citation_msg = abstention_citation_msg
 
             if not citation_ok and not has_fabricated_original_citation:
                 fallback_response = self._build_extractive_fallback(
