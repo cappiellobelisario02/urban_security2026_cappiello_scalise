@@ -1717,53 +1717,7 @@ The repository now contains an Ollama client, deterministic input/output guardra
 
 It is therefore possible to conclude that the technical components needed for a protected local SLM application are available and integrated. A final protected benchmark has been selected for delivery, but some metrics still require partial manual interpretation, especially around false positives and claim-level factual support.
 
-## 8.2 Future Work and Remaining Activities
-
-## 8.2.1 Completed Work
-
-At the current repository state, the following work has already been completed:
-
-1. local Ollama integration with `gemma:2b`;
-2. deterministic input guardrail implementation with keywords, regexes, normalization, and heuristics;
-3. deterministic output guardrail implementation with leakage and toxicity checks;
-4. trusted local knowledge base selection and indexing;
-5. PDF extraction and chunk generation with metadata retention;
-6. embedding generation with `sentence-transformers/all-MiniLM-L6-v2`;
-7. persistent ChromaDB storage and semantic retrieval;
-8. integration of `src/rag/` modules into `SafetySentinel`;
-9. grounded prompt construction inside the main pipeline;
-10. citation validation at the level of source-label syntax and membership;
-11. citation-repair retry logic for Gemma 2B outputs;
-12. deterministic extractive fallbacks for OWASP Top 10 and short generic factual prompts;
-13. automated benchmark and Red Team execution scripts;
-14. local API skeleton and interactive CLI execution path;
-15. automated unit tests for guardrails, Ollama client, and SafetySentinel;
-16. migration of the working environment to Python 3.11.9 with successful test execution.
-
-## 8.2.2 Remaining Work
-
-The main remaining activities are:
-
-1. improve claim-level citation verification beyond label syntax;
-2. refine the trade-off between strict blocking and useful grounded answers;
-3. define retrieval-confidence thresholds and context-sufficiency checks;
-4. aggregate and report per-component latency metrics in final tables;
-5. manually review benchmark outputs to distinguish true positives, false positives, and correct abstentions;
-6. produce qualitative case studies with prompts, retrieved chunks, and protected outputs;
-7. replace remaining `TBD` values with reviewed final measurements;
-8. optionally extend the system with semantic safety classifiers, reranking, hybrid retrieval, and richer monitoring.
-
-### Immediate project activities
-
-Before submission, the team should:
-
-1. refine citation validation beyond source-label syntax and membership;
-2. calibrate fallback behavior to reduce unnecessary blocking without weakening safety;
-3. improve retrieval-confidence estimation and abstention logic;
-4. aggregate per-component latency measurements into final report tables;
-5. interpret the benchmark results with manual case review;
-6. add qualitative case studies;
-7. replace the remaining `TBD` table entries with measured and reviewed results.
+## 8.2 Future Work
 
 ### Technical extensions
 
@@ -1787,31 +1741,6 @@ Possible future improvements include:
 
 The long-term value of Safety Sentinel lies in its modularity: stronger filters, retrievers, validators, and local models can be introduced without redesigning the entire application.
 
----
-
-# Final Delivery Checklist
-
-Before submission, the team should verify the following:
-
-- `results/red_team_results_current_v4.csv` is treated as the official final protected benchmark;
-- `DOCUMENTATION.md` is aligned with the final benchmark and final code state;
-- `README.md` reflects the actual setup and execution commands;
-- `venv/bin/python -m pytest tests -q` passes successfully in the final environment;
-- `scripts/build_knowledge_base.py` can rebuild the local vector database from the repository PDFs;
-- Ollama and `gemma:2b` are available on the target machine for demo or reproduction;
-- the final presentation highlights both improvements and residual trade-offs.
-
-## Suggested Presentation Flow
-
-For the final oral presentation or slides, a concise order is:
-
-1. project goal and independence factor;
-2. architecture of the protected pipeline;
-3. Red Team dataset and trusted knowledge base;
-4. guardrails and RAG integration;
-5. benchmark evolution from `current` to `v4`;
-6. strengths of the final system;
-7. remaining limitations and future work.
 
 ## Suggested Demo Prompts
 
