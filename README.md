@@ -267,26 +267,4 @@ Current limitations of the final project state:
 - retrieval confidence thresholds are not yet fully calibrated;
 - the benchmark requires partial manual interpretation for final scientific discussion.
 
-These limitations are documented in `DOCUMENTATION.md` and should be discussed explicitly in the final report/presentation.
-
----
-
-## Recommended Files for Final Review
-
-Before delivery, review these files first:
-
-- `DOCUMENTATION.md`
-- `README.md`
-- `src/main.py`
-- `src/guardrails.py`
-- `results/red_team_results_current_v4.csv`
-
----
-
-## Final Delivery Recommendation
-
-For the final submission, use:
-
-- `results/red_team_results_current_v4.csv` as the official protected benchmark reference;
-- `DOCUMENTATION.md` as the technical report;
-- this `README.md` as the execution guide.
+These limitations are documented in `DOCUMENTATION.md` 
